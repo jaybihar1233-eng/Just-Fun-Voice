@@ -40,6 +40,12 @@ const userVisitors = new Map();
 const dmThreads = new Map();
 // dmUnreadCounts: Map<`${viewerUserId}:${peerUserId}`, number>
 const dmUnreadCounts = new Map();
+// blockedUsers: Map<userId, Map<blockedUserId, { userId, nickname, avatarUri, blockedAtMs }>>
+const blockedUsers = new Map();
+// userDmPrivacy: Map<userId, 'ALL' | 'FOLLOWING'>
+const userDmPrivacy = new Map();
+// reports: Array<ReportRecord>
+const reports = [];
 
 function addUserSocket(userId, ws) {
   if (!userId || !ws) return;
@@ -90,6 +96,15 @@ function getThreadKey(a, b) {
   return [String(a), String(b)].sort().join('_');
 }
 
+function findUserActiveRoomId(userId) {
+  if (!userId) return '';
+  const uid = String(userId);
+  for (const room of rooms.values()) {
+    if (room.activeClients.has(uid)) return room.id;
+  }
+  return '';
+}
+
 function buildUserSummary(u, viewerId = '') {
   if (!u || !u.userId) return null;
   const uid = String(u.userId);
@@ -97,6 +112,7 @@ function buildUserSummary(u, viewerId = '') {
   const followingSet = userFollowing.get(uid);
   const visitorsArr = userVisitors.get(uid);
   const viewerFollowingSet = viewerId ? userFollowing.get(String(viewerId)) : null;
+  const viewerBlockedMap = viewerId ? blockedUsers.get(String(viewerId)) : null;
 
   return {
     userId: uid,
@@ -113,6 +129,14 @@ function buildUserSummary(u, viewerId = '') {
     followingCount: followingSet ? followingSet.size : 0,
     visitorsCount: visitorsArr ? visitorsArr.length : 0,
     isFollowedByMe: viewerFollowingSet ? viewerFollowingSet.has(uid) : false,
+    isBlockedByMe: viewerBlockedMap ? viewerBlockedMap.has(uid) : false,
+    inRoomId: findUserActiveRoomId(uid),
+    equippedFrameId: u.equippedFrameId || '',
+    equippedVehicleId: u.equippedVehicleId || '',
+    equippedVehicleName: u.equippedVehicleName || '',
+    unlockedMedalIds: Array.isArray(u.unlockedMedalIds) ? u.unlockedMedalIds : [],
+    receivedGifts: Array.isArray(u.receivedGifts) ? u.receivedGifts : [],
+    photos: Array.isArray(u.photos) ? u.photos.slice(0, 6) : [],
   };
 }
 
@@ -163,17 +187,34 @@ function buildSocialSnapshotForUser(userId) {
     const unreadCount = dmUnreadCounts.get(unreadKey) || 0;
     totalUnreadDm += unreadCount;
     const lastMsg = messages[messages.length - 1];
+    let previewText = '';
+    if (lastMsg) {
+      if (lastMsg.isRecalled) {
+        previewText = 'Message recalled';
+      } else if (lastMsg.msgType === 'VOICE') {
+        previewText = `[Voice ${lastMsg.voiceDurationSec || 1}s]`;
+      } else if (lastMsg.msgType === 'IMAGE') {
+        previewText = '[Photo]';
+      } else if (lastMsg.msgType === 'GIFT') {
+        previewText = `[Gift: ${lastMsg.giftName || 'Gift'}]`;
+      } else {
+        previewText = lastMsg.text || '';
+      }
+    }
     myThreads.push({
       peerUserId: peerId,
       peerName: peerProfile.nickname || lastMsg?.fromName || lastMsg?.toName || `User ${peerId}`,
       peerAvatarUri: peerProfile.avatarUri || '',
       unreadCount,
-      lastMessageText: lastMsg ? (lastMsg.isRecalled ? 'Message recalled' : lastMsg.text) : '',
+      lastMessageText: previewText,
       lastMessageAtMs: lastMsg ? lastMsg.createdAtMs : 0,
       messages: messages.slice(-80),
     });
   }
   myThreads.sort((a, b) => (b.lastMessageAtMs || 0) - (a.lastMessageAtMs || 0));
+
+  const myBlockedMap = blockedUsers.get(uid);
+  const blockedList = myBlockedMap ? Array.from(myBlockedMap.values()) : [];
 
   return {
     type: 'SOCIAL_STATE_SYNC',
@@ -189,6 +230,8 @@ function buildSocialSnapshotForUser(userId) {
     visitors,
     dmThreads: myThreads,
     totalUnreadDm,
+    blockedUsers: blockedList,
+    dmPrivacy: userDmPrivacy.get(uid) || 'ALL',
   };
 }
 
@@ -229,7 +272,13 @@ function searchRoomsAndUsers(rawQuery, viewerId = '') {
     const titleMatch = (room.title || '').toLowerCase().includes(q);
     const hostMatch = (room.hostName || '').toLowerCase().includes(q);
     if (!q || idMatch || titleMatch || hostMatch) {
-      const hostUser = users.get(room.hostId || room.id);
+      const hostUser = users.get(room.hostId || room.id) || users.get(room.id);
+      const validRoomDp = room.hostAvatarUri && !String(room.hostAvatarUri).startsWith('res://')
+        ? room.hostAvatarUri
+        : '';
+      const validHostDp = hostUser?.avatarUri && !String(hostUser.avatarUri).startsWith('res://')
+        ? hostUser.avatarUri
+        : '';
       matchedRoomsMap.set(room.id, {
         id: room.id,
         title: room.title || hostUser?.nickname || 'Voice Room',
@@ -239,8 +288,9 @@ function searchRoomsAndUsers(rawQuery, viewerId = '') {
         onlineCount: room.activeClients.size,
         hostId: room.hostId || room.id,
         hostName: room.hostName || hostUser?.nickname || 'Host',
-        hostAvatarUri: room.hostAvatarUri || hostUser?.avatarUri || '',
+        hostAvatarUri: validRoomDp || validHostDp || '',
         isLive: room.activeClients.size > 0,
+        isLockedRoom: Boolean(room.roomPassword),
       });
     }
   }
@@ -256,6 +306,12 @@ function searchRoomsAndUsers(rawQuery, viewerId = '') {
       // Ensure every matching user also has a searchable Room entry in the Room tab (like Masti Search!)
       if (!matchedRoomsMap.has(uid)) {
         const existingRoom = rooms.get(uid);
+        const validRoomDp = existingRoom?.hostAvatarUri && !String(existingRoom.hostAvatarUri).startsWith('res://')
+          ? existingRoom.hostAvatarUri
+          : '';
+        const validUserDp = u.avatarUri && !String(u.avatarUri).startsWith('res://')
+          ? u.avatarUri
+          : '';
         matchedRoomsMap.set(uid, {
           id: uid,
           title: existingRoom?.title || u.nickname || 'Voice Room',
@@ -265,8 +321,9 @@ function searchRoomsAndUsers(rawQuery, viewerId = '') {
           onlineCount: existingRoom ? existingRoom.activeClients.size : 0,
           hostId: uid,
           hostName: u.nickname || 'Host',
-          hostAvatarUri: existingRoom?.hostAvatarUri || u.avatarUri || '',
+          hostAvatarUri: validRoomDp || validUserDp || '',
           isLive: existingRoom ? existingRoom.activeClients.size > 0 : false,
+          isLockedRoom: Boolean(existingRoom?.roomPassword),
         });
       }
     }
@@ -313,6 +370,13 @@ function getOrCreateRoom(roomId, init = {}) {
       themeDrawableResId: init.themeDrawableResId || 0,
       isAdminChatOnly: false,
       chatClearedAt: 0,
+      roomPassword: init.roomPassword || '',
+      roomTotalCharm: 0,
+      roomContributions: {
+        daily: new Map(),
+        weekly: new Map(),
+        monthly: new Map(),
+      },
       categoryTag: init.categoryTag || 'Hot Party',
       countryName: init.countryName || 'India',
       seats: createDefaultSeats(),
@@ -333,6 +397,13 @@ function getLiveRoomsSummary() {
   for (const room of rooms.values()) {
     const activeCount = room.activeClients.size;
     if (activeCount > 0) {
+      const hostUser = users.get(room.hostId || room.id) || users.get(room.id);
+      const validRoomDp = room.hostAvatarUri && !String(room.hostAvatarUri).startsWith('res://')
+        ? room.hostAvatarUri
+        : '';
+      const validHostDp = hostUser?.avatarUri && !String(hostUser.avatarUri).startsWith('res://')
+        ? hostUser.avatarUri
+        : '';
       list.push({
         id: room.id,
         title: room.title,
@@ -341,14 +412,50 @@ function getLiveRoomsSummary() {
         countryName: room.countryName,
         onlineCount: activeCount,
         hostId: room.hostId,
-        hostName: room.hostName,
-        hostAvatarUri: room.hostAvatarUri,
+        hostName: room.hostName || hostUser?.nickname || 'Host',
+        hostAvatarUri: validRoomDp || validHostDp || '',
         isLive: true,
+        isLockedRoom: Boolean(room.roomPassword),
         activeUserIds: Array.from(room.activeClients.keys()),
+        activeUsers: buildRoomActiveUsers(room).slice(0, 4),
       });
     }
   }
   list.sort((a, b) => b.onlineCount - a.onlineCount);
+  return list;
+}
+
+function formatContributionList(map) {
+  if (!map) return [];
+  return Array.from(map.values())
+    .sort((a, b) => (b.coins || 0) - (a.coins || 0))
+    .slice(0, 50);
+}
+
+function buildContributionsPayload(room) {
+  return {
+    type: 'ROOM_CONTRIBUTIONS_UPDATE',
+    roomId: room.id,
+    roomTotalCharm: Number(room.roomTotalCharm || 0),
+    daily: formatContributionList(room.roomContributions?.daily),
+    weekly: formatContributionList(room.roomContributions?.weekly),
+    monthly: formatContributionList(room.roomContributions?.monthly),
+  };
+}
+
+function buildRoomActiveUsers(room) {
+  const list = [];
+  for (const uid of room.activeClients.keys()) {
+    const u = users.get(uid);
+    list.push({
+      userId: uid,
+      nickname: u?.nickname || (uid === room.hostId ? room.hostName : `User ${uid}`),
+      avatarUri: u?.avatarUri || (uid === room.hostId ? room.hostAvatarUri : ''),
+      level: Number(u?.level || 1),
+      gender: u?.gender || 'Boy',
+      bio: u?.bio || "He/she hasn't set a bio yet.",
+    });
+  }
   return list;
 }
 
@@ -367,9 +474,12 @@ function buildRoomSnapshot(room) {
       themeDrawableResId: room.themeDrawableResId,
       isAdminChatOnly: room.isAdminChatOnly,
       chatClearedAt: room.chatClearedAt,
+      isLockedRoom: Boolean(room.roomPassword),
+      roomTotalCharm: Number(room.roomTotalCharm || 0),
       onlineCount: room.activeClients.size,
       isLive: room.activeClients.size > 0,
       activeUserIds: Array.from(room.activeClients.keys()),
+      activeUsers: buildRoomActiveUsers(room),
       adminUsers: room.adminUsers,
       bannedChatUserIds: room.bannedChatUserIds,
       bannedUsers: room.bannedUsers,
@@ -591,6 +701,7 @@ wss.on('connection', (ws) => {
                 hostAvatarUri: ownRoom.hostAvatarUri,
                 onlineCount: ownRoom.activeClients.size,
                 isLive: ownRoom.activeClients.size > 0,
+                isLockedRoom: Boolean(ownRoom.roomPassword),
               },
             });
           }
@@ -678,7 +789,29 @@ wss.on('connection', (ws) => {
         const fromUserId = String(msg.fromUserId || meta.userId || '');
         const toUserId = String(msg.toUserId || '');
         const text = String(msg.text || '');
-        if (!fromUserId || !toUserId || !text.trim()) break;
+        const msgType = String(msg.msgType || 'TEXT');
+        const hasMedia = Boolean(msg.audioBase64 || msg.imageBase64 || msg.giftName);
+        if (!fromUserId || !toUserId || (!text.trim() && !hasMedia)) break;
+
+        // Enforce real block & DM privacy rules
+        const receiverBlocked = blockedUsers.get(toUserId);
+        const senderBlocked = blockedUsers.get(fromUserId);
+        if ((receiverBlocked && receiverBlocked.has(fromUserId)) || (senderBlocked && senderBlocked.has(toUserId))) {
+          safeSend(ws, {
+            type: 'DM_REJECTED',
+            peerUserId: toUserId,
+            reason: 'BLOCKED',
+          });
+          break;
+        }
+        if (userDmPrivacy.get(toUserId) === 'FOLLOWING' && !(userFollowing.get(toUserId)?.has(fromUserId))) {
+          safeSend(ws, {
+            type: 'DM_REJECTED',
+            peerUserId: toUserId,
+            reason: 'FOLLOWING_ONLY',
+          });
+          break;
+        }
 
         const fromProfile = users.get(fromUserId) || {};
         const toProfile = users.get(toUserId) || {};
@@ -703,8 +836,13 @@ wss.on('connection', (ws) => {
           toName,
           toAvatarUri,
           text,
-          msgType: msg.msgType || 'TEXT',
+          msgType,
           voiceDurationSec: Number(msg.voiceDurationSec || 0),
+          audioBase64: msg.audioBase64 || '',
+          imageBase64: msg.imageBase64 || '',
+          giftName: msg.giftName || '',
+          giftIcon: msg.giftIcon || '',
+          giftCount: Number(msg.giftCount || 1),
           createdAtMs: Number(msg.createdAtMs || Date.now()),
           isRecalled: false,
         };
@@ -722,6 +860,69 @@ wss.on('connection', (ws) => {
         sendToUser(fromUserId, { type: 'NEW_DM', peerUserId: toUserId, message: dmItem });
         pushSocialSyncToUser(toUserId);
         pushSocialSyncToUser(fromUserId);
+        break;
+      }
+
+      case 'DELETE_DM_THREAD': {
+        const userId = String(msg.userId || meta.userId || '');
+        const peerUserId = String(msg.peerUserId || '');
+        if (!userId || !peerUserId) break;
+        dmUnreadCounts.set(`${userId}:${peerUserId}`, 0);
+        dmThreads.delete(getThreadKey(userId, peerUserId));
+        pushSocialSyncToUser(userId);
+        break;
+      }
+
+      case 'BLOCK_USER': {
+        const fromUserId = String(msg.fromUserId || meta.userId || '');
+        const targetUserId = String(msg.targetUserId || '');
+        if (!fromUserId || !targetUserId || fromUserId === targetUserId) break;
+        let map = blockedUsers.get(fromUserId);
+        if (!map) {
+          map = new Map();
+          blockedUsers.set(fromUserId, map);
+        }
+        const targetProf = users.get(targetUserId) || {};
+        map.set(targetUserId, {
+          userId: targetUserId,
+          nickname: msg.targetNickname || targetProf.nickname || `User ${targetUserId}`,
+          avatarUri: msg.targetAvatarUri || targetProf.avatarUri || '',
+          blockedAtMs: Date.now(),
+        });
+        pushSocialSyncToUser(fromUserId);
+        break;
+      }
+
+      case 'UNBLOCK_USER': {
+        const fromUserId = String(msg.fromUserId || meta.userId || '');
+        const targetUserId = String(msg.targetUserId || '');
+        if (!fromUserId || !targetUserId) break;
+        blockedUsers.get(fromUserId)?.delete(targetUserId);
+        pushSocialSyncToUser(fromUserId);
+        break;
+      }
+
+      case 'SET_DM_PRIVACY': {
+        const uid = String(msg.userId || meta.userId || '');
+        if (!uid) break;
+        userDmPrivacy.set(uid, msg.mode === 'FOLLOWING' ? 'FOLLOWING' : 'ALL');
+        pushSocialSyncToUser(uid);
+        break;
+      }
+
+      case 'SUBMIT_REPORT': {
+        const record = {
+          id: `rep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          reporterId: String(msg.reporterId || meta.userId || ''),
+          targetUserId: String(msg.targetUserId || ''),
+          targetRoomId: String(msg.targetRoomId || ''),
+          reason: String(msg.reason || 'Other'),
+          details: String(msg.details || ''),
+          createdAt: Date.now(),
+        };
+        reports.push(record);
+        if (reports.length > 500) reports.shift();
+        safeSend(ws, { type: 'REPORT_ACK', reportId: record.id });
         break;
       }
 
@@ -753,19 +954,103 @@ wss.on('connection', (ws) => {
       }
 
       case 'SEND_GIFT_TX': {
+        const fromUserId = String(msg.fromUserId || meta.userId || '');
         const targetUserId = String(msg.targetUserId || '');
+        const roomId = String(msg.roomId || '');
         const charmDelta = Number(msg.charmDelta || 0);
+        const coinsSpent = Number(msg.coinsSpent || charmDelta);
         if (targetUserId && charmDelta > 0) {
           const existing = users.get(targetUserId) || { userId: targetUserId, user8DigitId: targetUserId };
           existing.totalCharmPoints = Number(existing.totalCharmPoints || 0) + charmDelta;
+          if (msg.giftName) {
+            const gifts = Array.isArray(existing.receivedGifts) ? [...existing.receivedGifts] : [];
+            const gIdx = gifts.findIndex((g) => g.name === msg.giftName);
+            const gCount = Number(msg.giftCount || 1);
+            if (gIdx >= 0) {
+              gifts[gIdx] = {
+                ...gifts[gIdx],
+                count: Number(gifts[gIdx].count || 0) + gCount,
+                charmValue: Number(gifts[gIdx].charmValue || 0) + charmDelta,
+              };
+            } else {
+              gifts.push({
+                id: msg.giftId || `g_${Date.now()}`,
+                name: msg.giftName,
+                icon: msg.giftIcon || '🎁',
+                count: gCount,
+                charmValue: charmDelta,
+              });
+            }
+            existing.receivedGifts = gifts.slice(0, 30);
+          }
           users.set(targetUserId, existing);
           pushSocialSyncToUser(targetUserId);
+        }
+        if (roomId && coinsSpent > 0) {
+          const room = rooms.get(roomId);
+          if (room) {
+            room.roomTotalCharm = Number(room.roomTotalCharm || 0) + coinsSpent;
+            const senderProf = users.get(fromUserId) || {};
+            const contribEntry = {
+              userId: fromUserId,
+              nickname: msg.fromName || senderProf.nickname || `User ${fromUserId}`,
+              avatarUri: msg.fromAvatarUri || senderProf.avatarUri || '',
+              level: Number(senderProf.level || 1),
+              gender: senderProf.gender || 'Boy',
+            };
+            ['daily', 'weekly', 'monthly'].forEach((period) => {
+              const map = room.roomContributions[period];
+              const prev = map.get(fromUserId);
+              map.set(fromUserId, {
+                ...contribEntry,
+                coins: Number(prev?.coins || 0) + coinsSpent,
+              });
+            });
+            broadcastToRoom(room, buildContributionsPayload(room));
+            broadcastToRoom(room, buildRoomSnapshot(room));
+          }
         }
         break;
       }
 
+      case 'GET_ROOM_CONTRIBUTIONS': {
+        const room = rooms.get(String(msg.roomId || ''));
+        if (room) {
+          safeSend(ws, buildContributionsPayload(room));
+        }
+        break;
+      }
+
+      case 'ROOM_SOUND_EFFECT': {
+        const room = rooms.get(String(msg.roomId || ''));
+        if (!room) break;
+        broadcastToRoom(room, {
+          type: 'ROOM_SOUND_EFFECT',
+          roomId: room.id,
+          senderId: String(msg.senderId || meta.userId || ''),
+          senderName: String(msg.senderName || 'User'),
+          effectId: String(msg.effectId || 'applause'),
+          effectName: String(msg.effectName || 'Applause'),
+          emoji: String(msg.emoji || '👏'),
+        });
+        break;
+      }
+
+      case 'VERIFY_ROOM_PASSWORD': {
+        const roomId = String(msg.roomId || '');
+        const pin = String(msg.password || '');
+        const room = rooms.get(roomId);
+        const ok = !room || !room.roomPassword || room.roomPassword === pin;
+        safeSend(ws, {
+          type: 'ROOM_PASSWORD_RESULT',
+          roomId,
+          ok,
+        });
+        break;
+      }
+
       case 'CREATE_OR_SAVE_ROOM': {
-        const { roomId, title, announcement, hostId, hostName, hostAvatarUri } = msg;
+        const { roomId, title, announcement, hostId, hostName, hostAvatarUri, roomPassword } = msg;
         if (!roomId) break;
         const room = getOrCreateRoom(roomId, {
           title,
@@ -773,12 +1058,14 @@ wss.on('connection', (ws) => {
           hostId,
           hostName,
           hostAvatarUri,
+          roomPassword: roomPassword || '',
         });
         if (title) room.title = title;
         if (announcement) room.announcement = announcement;
         if (hostId) room.hostId = hostId;
         if (hostName) room.hostName = hostName;
         if (hostAvatarUri) room.hostAvatarUri = hostAvatarUri;
+        if (roomPassword !== undefined) room.roomPassword = String(roomPassword || '');
         room.updatedAt = Date.now();
         broadcastToRoom(room, buildRoomSnapshot(room));
         broadcastLiveRoomsToHome();
@@ -829,6 +1116,7 @@ wss.on('connection', (ws) => {
         room.updatedAt = Date.now();
 
         broadcastToRoom(room, buildRoomSnapshot(room));
+        safeSend(ws, buildContributionsPayload(room));
         broadcastLiveRoomsToHome();
         break;
       }
@@ -916,6 +1204,7 @@ wss.on('connection', (ws) => {
           'themeDrawableResId',
           'isAdminChatOnly',
           'chatClearedAt',
+          'roomPassword',
           'adminUsers',
           'bannedChatUserIds',
           'bannedUsers',
@@ -924,12 +1213,12 @@ wss.on('connection', (ws) => {
         ];
         for (const key of allowedKeys) {
           if (fields[key] !== undefined) {
-            room[key] = fields[key];
+            room[key] = fields[key] === null ? '' : fields[key];
           }
         }
         room.updatedAt = Date.now();
         broadcastToRoom(room, buildRoomSnapshot(room));
-        if (fields.title !== undefined || fields.hostName !== undefined || fields.hostAvatarUri !== undefined) {
+        if (fields.title !== undefined || fields.hostName !== undefined || fields.hostAvatarUri !== undefined || fields.roomPassword !== undefined) {
           broadcastLiveRoomsToHome();
         }
         break;
