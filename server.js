@@ -536,6 +536,10 @@ function removeUserFromRoom(ws, roomId, userId) {
   }
 
   room.activeClients.delete(userId);
+  if (userId === room.hostId) {
+    room.isHostOnOtherSeat = false;
+    room.isHostMuted = false;
+  }
 
   let seatChanged = false;
   room.seats = room.seats.map((seat) => {
@@ -1316,7 +1320,7 @@ wss.on('connection', (ws) => {
       const t = setTimeout(() => {
         pendingDisconnectTimers.delete(timerKey);
         removeUserFromRoom(ws, targetRoomId, targetUserId);
-      }, 4000);
+      }, 2500);
       pendingDisconnectTimers.set(timerKey, t);
     }
   };
