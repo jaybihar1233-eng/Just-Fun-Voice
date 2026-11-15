@@ -47,6 +47,179 @@ const userDmPrivacy = new Map();
 // reports: Array<ReportRecord>
 const reports = [];
 
+// ============================================================================
+// ZERO-LOAD GLOBAL GREEDY BABY ENGINE (SYNCED ACROSS ALL CHAT ROOMS)
+// ============================================================================
+const GREEDY_EPOCH_MS = 1730000000000;
+const GREEDY_ROUND_MS = 40000;
+const GREEDY_SLOT_MULTIPLIERS = [5, 5, 5, 5, 10, 15, 25, 45];
+const greedySubscribers = new Set(); // Only sockets actively viewing Greedy Baby
+const greedyRoundBets = new Map();   // Map<roundNumber, Map<userId, { userId, nickname, avatarUri, slotBets, updatedAt }>>
+const greedyRecentChips = new Map(); // Map<roundNumber, Array<{ slotId, chipIndex, isUserId }>>
+const greedySettlements = new Map(); // Map<roundNumber, SettlementPayload>
+let greedyDayIndex = Math.floor(Date.now() / 86400000);
+let greedyTodayLeaderboard = new Map(); // Map<userId, { userId, userName, avatarUri, winCoins }>
+let greedyYesterdayLeaderboard = new Map();
+
+function ensureGreedyDayFresh() {
+  const curDay = Math.floor(Date.now() / 86400000);
+  if (curDay !== greedyDayIndex) {
+    if (curDay === greedyDayIndex + 1) {
+      greedyYesterdayLeaderboard = greedyTodayLeaderboard;
+    } else {
+      greedyYesterdayLeaderboard = new Map();
+    }
+    greedyTodayLeaderboard = new Map();
+    greedyDayIndex = curDay;
+  }
+}
+
+function getGreedyCurrentRoundInfo(nowMs = Date.now()) {
+  const safeDiff = Math.max(0, nowMs - GREEDY_EPOCH_MS);
+  const roundNumber = Math.floor(safeDiff / GREEDY_ROUND_MS);
+  const elapsedMs = safeDiff % GREEDY_ROUND_MS;
+  return { nowMs, roundNumber, elapsedMs };
+}
+
+function getGreedyWinningOutcomeForRound(roundNumber) {
+  let s = ((Math.abs(Math.floor(roundNumber)) + 1234567) % 2147483647) || 1;
+  s = (s * 48271) % 2147483647;
+  s = (s * 48271) % 2147483647;
+  s = (s * 48271) % 2147483647;
+  const r = s % 100;
+  if (r < 17) return 0;
+  if (r < 34) return 1;
+  if (r < 51) return 2;
+  if (r < 68) return 3;
+  if (r < 78) return 4;
+  if (r < 85) return 5;
+  if (r < 90) return 6;
+  if (r < 93) return 7;
+  if (r < 97) return 8; // Fruit Salad (0,1,2,3)
+  return 9;             // Pizza Platter (4,5,6,7)
+}
+
+function getGreedyWinningSlots(outcomeId) {
+  if (outcomeId === 8) return [0, 1, 2, 3];
+  if (outcomeId === 9) return [4, 5, 6, 7];
+  if (outcomeId >= 0 && outcomeId <= 7) return [outcomeId];
+  return [0];
+}
+
+function pruneOldGreedyRounds(currentRound) {
+  for (const r of greedyRoundBets.keys()) {
+    if (r < currentRound - 2) greedyRoundBets.delete(r);
+  }
+  for (const r of greedyRecentChips.keys()) {
+    if (r < currentRound - 1) greedyRecentChips.delete(r);
+  }
+  for (const r of greedySettlements.keys()) {
+    if (r < currentRound - 4) greedySettlements.delete(r);
+  }
+}
+
+function computeGreedySlotTotals(roundNumber) {
+  const totals = [0, 0, 0, 0, 0, 0, 0, 0];
+  const bettors = greedyRoundBets.get(roundNumber);
+  if (!bettors) return totals;
+  for (const b of bettors.values()) {
+    for (let s = 0; s < 8; s++) {
+      totals[s] += Number(b.slotBets[s] || 0);
+    }
+  }
+  return totals;
+}
+
+function formatGreedyLeaderboard(map) {
+  return Array.from(map.values())
+    .filter((e) => Number(e.winCoins || 0) > 0)
+    .sort((a, b) => Number(b.winCoins || 0) - Number(a.winCoins || 0))
+    .slice(0, 20)
+    .map((e, idx) => ({
+      rank: idx + 1,
+      userId: e.userId,
+      userName: e.userName || `User ${e.userId}`,
+      avatarUri: e.avatarUri || '',
+      winCoins: Number(e.winCoins || 0),
+    }));
+}
+
+function computeAndCacheGreedySettlement(roundNumber) {
+  if (greedySettlements.has(roundNumber)) {
+    return greedySettlements.get(roundNumber);
+  }
+  ensureGreedyDayFresh();
+  const winningFoodId = getGreedyWinningOutcomeForRound(roundNumber);
+  const winningSlots = getGreedyWinningSlots(winningFoodId);
+  const bettors = greedyRoundBets.get(roundNumber);
+  const allWinners = [];
+
+  if (bettors) {
+    for (const b of bettors.values()) {
+      let winAmount = 0;
+      for (const sId of winningSlots) {
+        const betAmt = Number(b.slotBets[sId] || 0);
+        if (betAmt > 0) {
+          winAmount += betAmt * (GREEDY_SLOT_MULTIPLIERS[sId] || 5);
+        }
+      }
+      if (winAmount > 0) {
+        const userProf = users.get(b.userId) || {};
+        const name = b.nickname || userProf.nickname || `User ${b.userId}`;
+        const avatar = b.avatarUri || userProf.avatarUri || '';
+        allWinners.push({
+          userId: b.userId,
+          userName: name,
+          avatarUri: avatar,
+          winAmount,
+        });
+        const prevLb = greedyTodayLeaderboard.get(b.userId);
+        greedyTodayLeaderboard.set(b.userId, {
+          userId: b.userId,
+          userName: name,
+          avatarUri: avatar,
+          winCoins: Number(prevLb?.winCoins || 0) + winAmount,
+        });
+      }
+    }
+  }
+
+  allWinners.sort((a, b) => b.winAmount - a.winAmount);
+  const topWinners = allWinners.slice(0, 3).map((w, idx) => ({
+    rank: idx + 1,
+    userId: w.userId,
+    userName: w.userName,
+    avatarUri: w.avatarUri || '',
+    winAmount: w.winAmount,
+  }));
+
+  const payload = {
+    type: 'GREEDY_SETTLEMENT',
+    roundNumber,
+    winningFoodId,
+    topWinners,
+    todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard),
+    yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard),
+    serverNowMs: Date.now(),
+  };
+  greedySettlements.set(roundNumber, payload);
+  return payload;
+}
+
+function broadcastToGreedySubscribers(payloadObj, excludeWs = null) {
+  const raw = JSON.stringify(payloadObj);
+  for (const clientWs of greedySubscribers) {
+    if (excludeWs && clientWs === excludeWs) continue;
+    if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+      try {
+        clientWs.send(raw);
+      } catch (_) {}
+    } else {
+      greedySubscribers.delete(clientWs);
+    }
+  }
+}
+
 function addUserSocket(userId, ws) {
   if (!userId || !ws) return;
   let set = userSockets.get(userId);
@@ -355,6 +528,104 @@ function createDefaultSeats() {
   }));
 }
 
+const ROCKET_TARGETS = {
+  1: 2500000,
+  2: 5000000,
+  3: 10000000,
+};
+
+function getNextDailyResetMs() {
+  const dayMs = 24 * 60 * 60 * 1000;
+  return (Math.floor(Date.now() / dayMs) + 1) * dayMs;
+}
+
+function createInitialRocketState() {
+  return {
+    level: 1,
+    currentExp: 0,
+    allLaunched: false,
+    resetAtMs: getNextDailyResetMs(),
+    contributors: new Map(),
+    history: [],
+  };
+}
+
+function ensureRocketDailyFresh(room) {
+  if (!room) return;
+  if (!room.rocketState) {
+    room.rocketState = createInitialRocketState();
+    return;
+  }
+  if (Date.now() >= Number(room.rocketState.resetAtMs || 0)) {
+    room.rocketState = createInitialRocketState();
+  }
+}
+
+function buildRocketStatePayload(room) {
+  ensureRocketDailyFresh(room);
+  const rs = room.rocketState;
+  const lvl = Math.min(3, Math.max(1, Number(rs.level || 1)));
+  const contribs = Array.from(rs.contributors.values())
+    .sort((a, b) => Number(b.coins || 0) - Number(a.coins || 0))
+    .slice(0, 20);
+  return {
+    roomId: room.id,
+    level: lvl,
+    currentExp: Number(rs.currentExp || 0),
+    targetExp: ROCKET_TARGETS[lvl] || ROCKET_TARGETS[1],
+    allLaunched: Boolean(rs.allLaunched),
+    resetAtMs: Number(rs.resetAtMs || getNextDailyResetMs()),
+    contributors: contribs,
+    history: Array.isArray(rs.history) ? rs.history.slice(0, 20) : [],
+  };
+}
+
+function computeRocketLaunchRewards(level, sortedContribs, room) {
+  const topRewards = level === 1
+    ? [50000, 25000, 15000]
+    : level === 2
+      ? [120000, 60000, 30000]
+      : [300000, 150000, 80000];
+  const baseLucky = level === 1 ? 8000 : level === 2 ? 18000 : 35000;
+
+  const rewardsByUser = {};
+  const winners = [];
+
+  for (let i = 0; i < Math.min(3, sortedContribs.length); i++) {
+    const c = sortedContribs[i];
+    if (!c || !c.userId) continue;
+    const amt = topRewards[i];
+    rewardsByUser[c.userId] = amt;
+    winners.push({
+      userId: c.userId,
+      nickname: c.nickname || `User ${c.userId}`,
+      avatarUri: c.avatarUri || '',
+      coinsWon: amt,
+      isTopContributor: true,
+      rank: i + 1,
+    });
+  }
+
+  for (const uid of room.activeClients.keys()) {
+    if (rewardsByUser[uid] !== undefined) continue;
+    const uProf = users.get(uid) || {};
+    const stepBonus = (Math.floor(Math.random() * 4) + 1) * Math.floor(baseLucky / 4);
+    const amt = baseLucky + stepBonus;
+    rewardsByUser[uid] = amt;
+    winners.push({
+      userId: uid,
+      nickname: uProf.nickname || (uid === room.hostId ? room.hostName : `User ${uid}`),
+      avatarUri: uProf.avatarUri || (uid === room.hostId ? room.hostAvatarUri : ''),
+      coinsWon: amt,
+      isTopContributor: false,
+      rank: winners.length + 1,
+    });
+  }
+
+  const totalPoolCoins = Object.values(rewardsByUser).reduce((acc, v) => acc + Number(v || 0), 0);
+  return { rewardsByUser, winners, totalPoolCoins };
+}
+
 function getOrCreateRoom(roomId, init = {}) {
   let room = rooms.get(roomId);
   if (!room) {
@@ -377,6 +648,7 @@ function getOrCreateRoom(roomId, init = {}) {
         weekly: new Map(),
         monthly: new Map(),
       },
+      rocketState: createInitialRocketState(),
       categoryTag: init.categoryTag || 'Hot Party',
       countryName: init.countryName || 'India',
       seats: createDefaultSeats(),
@@ -485,6 +757,7 @@ function buildRoomSnapshot(room) {
       bannedUsers: room.bannedUsers,
       seats: room.seats,
       messages: room.messages.slice(-60),
+      rocketState: buildRocketStatePayload(room),
     },
   };
 }
@@ -512,6 +785,7 @@ function broadcastToRoom(room, payloadObj, excludeUserId = null) {
 function broadcastLiveRoomsToHome() {
   const payload = JSON.stringify({
     type: 'LIVE_ROOMS_UPDATE',
+    serverNowMs: Date.now(),
     rooms: getLiveRoomsSummary(),
   });
   for (const clientWs of homeSubscribers) {
@@ -626,8 +900,8 @@ wss.on('connection', (ws) => {
   clientMeta.set(ws, meta);
   homeSubscribers.add(ws);
 
-  // Immediately push live rooms list on connect
-  safeSend(ws, { type: 'LIVE_ROOMS_UPDATE', rooms: getLiveRoomsSummary() });
+  // Immediately push live rooms list + authoritative server clock on connect
+  safeSend(ws, { type: 'LIVE_ROOMS_UPDATE', serverNowMs: Date.now(), rooms: getLiveRoomsSummary() });
 
   ws.on('pong', () => {
     meta.missedPings = 0;
@@ -687,7 +961,7 @@ wss.on('connection', (ws) => {
 
       case 'SUBSCRIBE_HOME': {
         homeSubscribers.add(ws);
-        safeSend(ws, { type: 'LIVE_ROOMS_UPDATE', rooms: getLiveRoomsSummary() });
+        safeSend(ws, { type: 'LIVE_ROOMS_UPDATE', serverNowMs: Date.now(), rooms: getLiveRoomsSummary() });
         if (msg.userId) {
           const uid = String(msg.userId);
           meta.userId = uid;
@@ -1010,9 +1284,113 @@ wss.on('connection', (ws) => {
                 coins: Number(prev?.coins || 0) + coinsSpent,
               });
             });
+            // Rocket Launcher Fuel Progression & Launch Trigger (25L / 50L / 1Cr)
+            ensureRocketDailyFresh(room);
+            const rs = room.rocketState;
+            if (!rs.allLaunched) {
+              rs.currentExp = Number(rs.currentExp || 0) + coinsSpent;
+              const prevRc = rs.contributors.get(fromUserId);
+              rs.contributors.set(fromUserId, {
+                userId: fromUserId,
+                nickname: contribEntry.nickname,
+                avatarUri: contribEntry.avatarUri,
+                coins: Number(prevRc?.coins || 0) + coinsSpent,
+              });
+
+              while (!rs.allLaunched) {
+                const lvl = Math.min(3, Math.max(1, Number(rs.level || 1)));
+                const target = ROCKET_TARGETS[lvl] || ROCKET_TARGETS[1];
+                if (rs.currentExp < target) break;
+
+                const excess = rs.currentExp - target;
+                const sortedContribs = Array.from(rs.contributors.values())
+                  .sort((a, b) => Number(b.coins || 0) - Number(a.coins || 0));
+                const topGifter = sortedContribs[0] || {
+                  userId: fromUserId,
+                  nickname: contribEntry.nickname,
+                  avatarUri: contribEntry.avatarUri,
+                  coins: coinsSpent,
+                };
+
+                const { rewardsByUser, winners, totalPoolCoins } = computeRocketLaunchRewards(lvl, sortedContribs, room);
+                const launchId = `rocket_${room.id}_L${lvl}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+                const launchedAtMs = Date.now();
+
+                rs.history.unshift({
+                  launchId,
+                  level: lvl,
+                  topGifterId: topGifter.userId,
+                  topGifterName: topGifter.nickname || 'Top Gifter',
+                  topGifterAvatarUri: topGifter.avatarUri || '',
+                  totalPoolCoins,
+                  launchedAtMs,
+                });
+                rs.history = rs.history.slice(0, 30);
+
+                broadcastToRoom(room, {
+                  type: 'ROCKET_LAUNCHED',
+                  roomId: room.id,
+                  launchId,
+                  level: lvl,
+                  topGifterId: topGifter.userId,
+                  topGifterName: topGifter.nickname || 'Top Gifter',
+                  topGifterAvatarUri: topGifter.avatarUri || '',
+                  totalPoolCoins,
+                  rewardsByUser,
+                  winners,
+                  launchedAtMs,
+                });
+
+                const sysMsg = {
+                  id: `sys_rocket_${launchId}`,
+                  senderId: 'system',
+                  senderName: 'System',
+                  message: `🚀 Lv.${lvl} Rocket launched! Top Fueler: ${topGifter.nickname || 'VIP'} • ${totalPoolCoins.toLocaleString()} coins shared!`,
+                  isSystem: true,
+                  createdAtMs: launchedAtMs,
+                };
+                room.messages.push(sysMsg);
+                if (room.messages.length > 80) room.messages = room.messages.slice(-60);
+                broadcastToRoom(room, { type: 'NEW_MESSAGE', roomId: room.id, message: sysMsg });
+
+                if (lvl < 3) {
+                  rs.level = lvl + 1;
+                  rs.currentExp = excess;
+                  rs.contributors = new Map();
+                  if (excess > 0) {
+                    rs.contributors.set(fromUserId, {
+                      userId: fromUserId,
+                      nickname: contribEntry.nickname,
+                      avatarUri: contribEntry.avatarUri,
+                      coins: excess,
+                    });
+                  }
+                } else {
+                  rs.allLaunched = true;
+                  rs.currentExp = target;
+                  break;
+                }
+              }
+            }
+
+            broadcastToRoom(room, {
+              type: 'ROCKET_STATE_UPDATE',
+              rocketState: buildRocketStatePayload(room),
+            });
             broadcastToRoom(room, buildContributionsPayload(room));
             broadcastToRoom(room, buildRoomSnapshot(room));
           }
+        }
+        break;
+      }
+
+      case 'GET_ROCKET_STATE': {
+        const room = rooms.get(String(msg.roomId || ''));
+        if (room) {
+          safeSend(ws, {
+            type: 'ROCKET_STATE_UPDATE',
+            rocketState: buildRocketStatePayload(room),
+          });
         }
         break;
       }
@@ -1302,11 +1680,129 @@ wss.on('connection', (ws) => {
         safeSend(ws, { type: 'FEEDBACK_ACK', ticketId: msg.ticket?.id || '' });
         break;
       }
+
+      case 'GREEDY_OPEN': {
+        greedySubscribers.add(ws);
+        ensureGreedyDayFresh();
+        const uid = String(msg.userId || meta.userId || '');
+        const { nowMs, roundNumber, elapsedMs } = getGreedyCurrentRoundInfo();
+        pruneOldGreedyRounds(roundNumber);
+
+        const roundBettors = greedyRoundBets.get(roundNumber);
+        const myEntry = uid && roundBettors ? roundBettors.get(uid) : null;
+        const userSlotBets = myEntry ? myEntry.slotBets : {};
+        const settlement = elapsedMs >= 35000 ? computeAndCacheGreedySettlement(roundNumber) : null;
+
+        safeSend(ws, {
+          type: 'GREEDY_STATE_SYNC',
+          serverNowMs: nowMs,
+          roundNumber,
+          elapsedMs,
+          slotTotals: computeGreedySlotTotals(roundNumber),
+          userSlotBets,
+          recentChips: (greedyRecentChips.get(roundNumber) || []).slice(-32),
+          settlement,
+          todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard),
+          yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard),
+        });
+        break;
+      }
+
+      case 'GREEDY_CLOSE': {
+        greedySubscribers.delete(ws);
+        break;
+      }
+
+      case 'GREEDY_PLACE_BET': {
+        const uid = String(msg.userId || meta.userId || '');
+        if (!uid) break;
+        const { nowMs, roundNumber: curRound, elapsedMs } = getGreedyCurrentRoundInfo();
+        const reqRound = Number(msg.roundNumber || curRound);
+        // Allow bets during BET_TIME (or within 1.5s latency grace at transition)
+        if (Math.abs(reqRound - curRound) > 1 || (reqRound === curRound && elapsedMs > 31500)) {
+          break;
+        }
+        const targetRound = curRound;
+        pruneOldGreedyRounds(targetRound);
+
+        let roundBettors = greedyRoundBets.get(targetRound);
+        if (!roundBettors) {
+          roundBettors = new Map();
+          greedyRoundBets.set(targetRound, roundBettors);
+        }
+        const userProf = users.get(uid) || {};
+        const existing = roundBettors.get(uid) || {
+          userId: uid,
+          nickname: msg.nickname || userProf.nickname || `User ${uid}`,
+          avatarUri: msg.avatarUri || userProf.avatarUri || '',
+          slotBets: {},
+          updatedAt: nowMs,
+        };
+        if (msg.nickname) existing.nickname = String(msg.nickname);
+        if (msg.avatarUri) existing.avatarUri = String(msg.avatarUri);
+        existing.updatedAt = nowMs;
+
+        const incomingBets = msg.betsBySlot || {};
+        const betSlots = [];
+        for (const [sKey, sAmtRaw] of Object.entries(incomingBets)) {
+          const sId = Number(sKey);
+          const sAmt = Number(sAmtRaw || 0);
+          if (sId >= 0 && sId <= 7 && sAmt > 0) {
+            existing.slotBets[sId] = Number(existing.slotBets[sId] || 0) + sAmt;
+            betSlots.push(sId);
+          }
+        }
+        if (betSlots.length === 0) break;
+        roundBettors.set(uid, existing);
+
+        let chipHist = greedyRecentChips.get(targetRound);
+        if (!chipHist) {
+          chipHist = [];
+          greedyRecentChips.set(targetRound, chipHist);
+        }
+        const chipIdx = Math.max(0, Math.min(8, Number(msg.chipIndex || 1)));
+        betSlots.forEach((sId) => {
+          chipHist.push({ slotId: sId, chipIndex: chipIdx, userId: uid });
+        });
+        if (chipHist.length > 48) {
+          chipHist.splice(0, chipHist.length - 48);
+        }
+
+        const slotTotals = computeGreedySlotTotals(targetRound);
+        broadcastToGreedySubscribers({
+          type: 'GREEDY_BET_EVENT',
+          serverNowMs: nowMs,
+          roundNumber: targetRound,
+          userId: uid,
+          slotIds: betSlots,
+          chipIndex: chipIdx,
+          slotTotals,
+        }, ws);
+        break;
+      }
+
+      case 'GREEDY_GET_SETTLEMENT': {
+        const reqRound = Number(msg.roundNumber);
+        if (!Number.isFinite(reqRound)) break;
+        const { roundNumber: curRound, elapsedMs } = getGreedyCurrentRoundInfo();
+        if (reqRound > curRound || (reqRound === curRound && elapsedMs < 34500)) {
+          break;
+        }
+        const alreadyCached = greedySettlements.has(reqRound);
+        const settlementPayload = computeAndCacheGreedySettlement(reqRound);
+        if (!alreadyCached) {
+          broadcastToGreedySubscribers(settlementPayload);
+        } else {
+          safeSend(ws, settlementPayload);
+        }
+        break;
+      }
     }
   });
 
   const scheduleGraceDisconnect = () => {
     homeSubscribers.delete(ws);
+    greedySubscribers.delete(ws);
     if (meta.userId) {
       removeUserSocket(meta.userId, ws);
     }
