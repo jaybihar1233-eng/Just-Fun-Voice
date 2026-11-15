@@ -611,6 +611,236 @@ function createDefaultSeats() {
   }));
 }
 
+// ============================================================================
+// AUTHORITATIVE REAL-TIME USER LEVEL & EXP ENGINE (`Lv.0`..`Lv.50`)
+// EXP Sources (ONLY):
+//   1. Gift Send (`SEND_GIFT_TX`): 5 Coins spent = 1 EXP (min 1)
+//   2. Rocket Launch (`ROCKET_LAUNCHED`): Top 1-3 win 15x Coin Reward as EXP
+//   3. Room Stay (`ROOM_STAY_CLAIM`): 10 mins = 1,000 EXP
+//      - Own Room Max: 10,000 EXP/day
+//      - Other Room Max: 20,000 EXP/day
+// ============================================================================
+const LEVEL_CUMULATIVE_EXP = {
+  0: 0,
+  1: 5000,
+  2: 15000,
+  3: 30000,
+  4: 50000,
+  5: 80000,
+  6: 120000,
+  7: 170000,
+  8: 230000,
+  9: 300000,
+  10: 400000,
+  11: 520000,
+  12: 660000,
+  13: 820000,
+  14: 1000000,
+  15: 1200000,
+  16: 1420000,
+  17: 1660000,
+  18: 1920000,
+  19: 2200000,
+  20: 2500000,
+  21: 2820000,
+  22: 3160000,
+  23: 3520000,
+  24: 3900000,
+  25: 4300000,
+  26: 4600000,
+  27: 4902282,
+  28: 5363700,
+  29: 6500000,
+  30: 8000000,
+  31: 12000000,
+  32: 17000000,
+  33: 24000000,
+  34: 32000000,
+  35: 42000000,
+  36: 55000000,
+  37: 70000000,
+  38: 88000000,
+  39: 110000000,
+  40: 135000000,
+  41: 162000000,
+  42: 192000000,
+  43: 224000000,
+  44: 258000000,
+  45: 290000000,
+  46: 317066904,
+  47: 330256800,
+  48: 350000000,
+  49: 375000000,
+  50: 400000000,
+};
+
+const LEVEL_COIN_MILESTONES = [
+  { level: 4, coins: 9000 },
+  { level: 6, coins: 12000 },
+  { level: 8, coins: 30000 },
+  { level: 10, coins: 60000 },
+  { level: 12, coins: 90000 },
+  { level: 15, coins: 180000 },
+  { level: 18, coins: 240000 },
+  { level: 20, coins: 300000 },
+  { level: 22, coins: 480000 },
+  { level: 25, coins: 780000 },
+  { level: 27, coins: 900000 },
+  { level: 30, coins: 3000000 },
+  { level: 33, coins: 6000000 },
+  { level: 36, coins: 9000000 },
+  { level: 40, coins: 10000000 },
+  { level: 43, coins: 11000000 },
+  { level: 46, coins: 12000000 },
+  { level: 50, coins: 13000000 },
+];
+
+const ROOM_STAY_INTERVAL_MS = 10 * 60 * 1000;
+const ROOM_STAY_MIN_ELAPSED_MS = 580 * 1000; // 20s clock tolerance on 10m
+const ROOM_STAY_EXP_PER_STEP = 1000;
+const ROOM_STAY_MAX_OWN_DAILY = 10000;
+const ROOM_STAY_MAX_OTHER_DAILY = 20000;
+
+// Map<userId, { exp, level, creditedCoinLevels: Set<number>, dayKey: number, dailyOwnRoomStayExp: number, dailyOtherRoomStayExp: number }>
+const userLevels = new Map();
+// Map<userId, { roomId, joinedAtMs, lastClaimAtMs }>
+const userRoomStayTracking = new Map();
+
+function getCurrentDayKey() {
+  return Math.floor(Date.now() / 86400000);
+}
+
+function computeLevelFromExp(exp) {
+  const safeExp = Math.max(0, Math.floor(Number(exp || 0)));
+  let lv = 0;
+  for (let i = 1; i <= 50; i++) {
+    if (safeExp >= LEVEL_CUMULATIVE_EXP[i]) {
+      lv = i;
+    } else {
+      break;
+    }
+  }
+  const nextLv = Math.min(50, lv + 1);
+  const nextExp = lv >= 50
+    ? Math.max(LEVEL_CUMULATIVE_EXP[50], safeExp)
+    : LEVEL_CUMULATIVE_EXP[nextLv];
+  return { level: lv, exp: safeExp, nextLevelExp: nextExp };
+}
+
+function getOrCreateUserLevelState(uid) {
+  const today = getCurrentDayKey();
+  let st = userLevels.get(uid);
+  if (!st) {
+    st = {
+      exp: 0,
+      level: 0,
+      creditedCoinLevels: new Set(),
+      dayKey: today,
+      dailyOwnRoomStayExp: 0,
+      dailyOtherRoomStayExp: 0,
+    };
+    userLevels.set(uid, st);
+  }
+  if (st.dayKey !== today) {
+    st.dayKey = today;
+    st.dailyOwnRoomStayExp = 0;
+    st.dailyOtherRoomStayExp = 0;
+  }
+  return st;
+}
+
+function buildLevelStatePayload(uid, extra = {}) {
+  const st = getOrCreateUserLevelState(uid);
+  const computed = computeLevelFromExp(st.exp);
+  return {
+    type: 'LEVEL_STATE_SYNC',
+    userId: uid,
+    currentLevel: computed.level,
+    currentExp: computed.exp,
+    nextLevelExp: computed.nextLevelExp,
+    creditedCoinLevels: Array.from(st.creditedCoinLevels).sort((a, b) => a - b),
+    dayKey: st.dayKey,
+    dailyOwnRoomStayExpEarned: st.dailyOwnRoomStayExp,
+    dailyOtherRoomStayExpEarned: st.dailyOtherRoomStayExp,
+    ...extra,
+  };
+}
+
+function broadcastUserLevelToRooms(uid, newLevel) {
+  for (const room of rooms.values()) {
+    let changed = false;
+    if (room.activeClients.has(uid)) {
+      changed = true;
+    }
+    if (Array.isArray(room.seats)) {
+      room.seats = room.seats.map((seat) => {
+        if (seat && seat.occupiedUserId === uid && Number(seat.occupiedLevel || 0) !== newLevel) {
+          changed = true;
+          return { ...seat, occupiedLevel: newLevel };
+        }
+        return seat;
+      });
+    }
+    if (changed) {
+      broadcastToRoom(room, buildRoomSnapshot(room));
+    }
+  }
+}
+
+function grantUserExp(uid, expGain, reason = 'EXP') {
+  if (!uid || !Number.isFinite(expGain) || expGain <= 0) return null;
+  const st = getOrCreateUserLevelState(uid);
+  const prevLevel = st.level;
+  st.exp = Math.max(0, Math.floor(st.exp + expGain));
+  const computed = computeLevelFromExp(st.exp);
+  st.level = computed.level;
+
+  let milestoneCoinsAdded = 0;
+  const unlockedMilestones = [];
+  for (const m of LEVEL_COIN_MILESTONES) {
+    if (st.level >= m.level && !st.creditedCoinLevels.has(m.level)) {
+      st.creditedCoinLevels.add(m.level);
+      milestoneCoinsAdded += m.coins;
+      unlockedMilestones.push(m.level);
+    }
+  }
+
+  if (milestoneCoinsAdded > 0) {
+    const curBal = getOrInitGreedyBalance(uid);
+    const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + milestoneCoinsAdded);
+    greedyUserBalances.set(uid, newBal);
+    sendToUser(uid, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+  }
+
+  const prof = users.get(uid);
+  if (prof) {
+    prof.level = st.level;
+    users.set(uid, prof);
+  }
+
+  if (st.level !== prevLevel) {
+    broadcastUserLevelToRooms(uid, st.level);
+  }
+
+  sendToUser(
+    uid,
+    buildLevelStatePayload(uid, {
+      lastExpGain: Math.floor(expGain),
+      lastExpReason: reason,
+      leveledUpFrom: st.level > prevLevel ? prevLevel : -1,
+      milestoneCoinsAdded,
+      unlockedMilestones,
+    })
+  );
+
+  return {
+    newLevel: st.level,
+    newExp: st.exp,
+    leveledUp: st.level > prevLevel,
+    milestoneCoinsAdded,
+  };
+}
+
 const ROCKET_TARGETS = {
   1: 2500000,
   2: 5000000,
@@ -672,18 +902,22 @@ function computeRocketLaunchRewards(level, sortedContribs, room) {
   const baseLucky = level === 1 ? 8000 : level === 2 ? 18000 : 35000;
 
   const rewardsByUser = {};
+  const expByUser = {};
   const winners = [];
 
   for (let i = 0; i < Math.min(3, sortedContribs.length); i++) {
     const c = sortedContribs[i];
     if (!c || !c.userId) continue;
     const amt = topRewards[i];
+    const expWon = amt * 15; // Matches Rocket Reward Card ("15 times EXP")
     rewardsByUser[c.userId] = amt;
+    expByUser[c.userId] = expWon;
     winners.push({
       userId: c.userId,
       nickname: c.nickname || `User ${c.userId}`,
       avatarUri: c.avatarUri || '',
       coinsWon: amt,
+      expWon,
       isTopContributor: true,
       rank: i + 1,
     });
@@ -700,13 +934,14 @@ function computeRocketLaunchRewards(level, sortedContribs, room) {
       nickname: uProf.nickname || (uid === room.hostId ? room.hostName : `User ${uid}`),
       avatarUri: uProf.avatarUri || (uid === room.hostId ? room.hostAvatarUri : ''),
       coinsWon: amt,
+      expWon: 0,
       isTopContributor: false,
       rank: winners.length + 1,
     });
   }
 
   const totalPoolCoins = Object.values(rewardsByUser).reduce((acc, v) => acc + Number(v || 0), 0);
-  return { rewardsByUser, winners, totalPoolCoins };
+  return { rewardsByUser, expByUser, winners, totalPoolCoins };
 }
 
 function getOrCreateRoom(roomId, init = {}) {
@@ -806,7 +1041,7 @@ function buildRoomActiveUsers(room) {
       userId: uid,
       nickname: u?.nickname || (uid === room.hostId ? room.hostName : `User ${uid}`),
       avatarUri: u?.avatarUri || (uid === room.hostId ? room.hostAvatarUri : ''),
-      level: Number(u?.level || 1),
+      level: Number(userLevels.get(uid)?.level ?? u?.level ?? 0),
       gender: u?.gender || 'Boy',
       bio: u?.bio || "He/she hasn't set a bio yet.",
     });
@@ -1018,11 +1253,13 @@ wss.on('connection', (ws) => {
         addUserSocket(uid, ws);
 
         const existing = users.get(uid) || {};
+        const srvLevelState = userLevels.get(uid);
         const merged = {
           ...existing,
           ...profile,
           userId: uid,
           user8DigitId: uid,
+          level: srvLevelState ? srvLevelState.level : Number(profile.level ?? existing.level ?? 0),
           // Keep server-authoritative charm points if higher than client cache
           totalCharmPoints: Math.max(Number(existing.totalCharmPoints || 0), Number(profile.totalCharmPoints || 0)),
           updatedAt: Date.now(),
@@ -1351,6 +1588,10 @@ wss.on('connection', (ws) => {
           users.set(targetUserId, existing);
           pushSocialSyncToUser(targetUserId);
         }
+        if (fromUserId && coinsSpent > 0) {
+          const giftSendExp = Math.max(1, Math.floor(coinsSpent / 5));
+          grantUserExp(fromUserId, giftSendExp, 'GIFT_SEND');
+        }
         if (roomId && coinsSpent > 0) {
           const room = rooms.get(roomId);
           if (room) {
@@ -1360,7 +1601,7 @@ wss.on('connection', (ws) => {
               userId: fromUserId,
               nickname: msg.fromName || senderProf.nickname || `User ${fromUserId}`,
               avatarUri: msg.fromAvatarUri || senderProf.avatarUri || '',
-              level: Number(senderProf.level || 1),
+              level: Number(userLevels.get(fromUserId)?.level ?? senderProf.level ?? 0),
               gender: senderProf.gender || 'Boy',
             };
             ['daily', 'weekly', 'monthly'].forEach((period) => {
@@ -1399,7 +1640,7 @@ wss.on('connection', (ws) => {
                   coins: coinsSpent,
                 };
 
-                const { rewardsByUser, winners, totalPoolCoins } = computeRocketLaunchRewards(lvl, sortedContribs, room);
+                const { rewardsByUser, expByUser, winners, totalPoolCoins } = computeRocketLaunchRewards(lvl, sortedContribs, room);
                 const launchId = `rocket_${room.id}_L${lvl}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
                 const launchedAtMs = Date.now();
 
@@ -1414,6 +1655,13 @@ wss.on('connection', (ws) => {
                 });
                 rs.history = rs.history.slice(0, 30);
 
+                // Credit Rocket 15x EXP to Top 1-3 contributors authoritatively
+                for (const [winnerUid, expAmt] of Object.entries(expByUser)) {
+                  if (Number(expAmt) > 0) {
+                    grantUserExp(winnerUid, Number(expAmt), `ROCKET_L${lvl}`);
+                  }
+                }
+
                 broadcastToRoom(room, {
                   type: 'ROCKET_LAUNCHED',
                   roomId: room.id,
@@ -1424,6 +1672,7 @@ wss.on('connection', (ws) => {
                   topGifterAvatarUri: topGifter.avatarUri || '',
                   totalPoolCoins,
                   rewardsByUser,
+                  expByUser,
                   winners,
                   launchedAtMs,
                 });
@@ -1583,6 +1832,15 @@ wss.on('connection', (ws) => {
 
         room.activeClients.set(userId, ws);
         room.updatedAt = Date.now();
+        const prevStay = userRoomStayTracking.get(String(userId));
+        if (!prevStay || prevStay.roomId !== String(roomId)) {
+          const nowTs = Date.now();
+          userRoomStayTracking.set(String(userId), {
+            roomId: String(roomId),
+            joinedAtMs: nowTs,
+            lastClaimAtMs: nowTs,
+          });
+        }
 
         broadcastToRoom(room, buildRoomSnapshot(room));
         safeSend(ws, buildContributionsPayload(room));
@@ -1765,6 +2023,90 @@ wss.on('connection', (ws) => {
         });
         if (feedbacks.length > 500) feedbacks.shift();
         safeSend(ws, { type: 'FEEDBACK_ACK', ticketId: msg.ticket?.id || '' });
+        break;
+      }
+
+      case 'LEVEL_INIT_SYNC': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (!uid) break;
+        if (!meta.userId) meta.userId = uid;
+        addUserSocket(uid, ws);
+        const st = getOrCreateUserLevelState(uid);
+        const clientExp = Math.max(0, Math.floor(Number(msg.clientExp || 0)));
+        if (st.exp === 0 && clientExp > 0) {
+          st.exp = clientExp;
+          const computed = computeLevelFromExp(st.exp);
+          st.level = computed.level;
+          if (Array.isArray(msg.creditedCoinLevels)) {
+            for (const lv of msg.creditedCoinLevels) {
+              const n = Number(lv);
+              if (Number.isInteger(n) && n > 0) st.creditedCoinLevels.add(n);
+            }
+          }
+          const today = getCurrentDayKey();
+          if (Number(msg.dayKey) === today) {
+            st.dailyOwnRoomStayExp = Math.min(
+              ROOM_STAY_MAX_OWN_DAILY,
+              Math.max(st.dailyOwnRoomStayExp, Math.floor(Number(msg.dailyOwnRoomStayExpEarned || 0)))
+            );
+            st.dailyOtherRoomStayExp = Math.min(
+              ROOM_STAY_MAX_OTHER_DAILY,
+              Math.max(st.dailyOtherRoomStayExp, Math.floor(Number(msg.dailyOtherRoomStayExpEarned || 0)))
+            );
+          }
+          const prof = users.get(uid);
+          if (prof) {
+            prof.level = st.level;
+            users.set(uid, prof);
+          }
+        }
+        safeSend(ws, buildLevelStatePayload(uid));
+        break;
+      }
+
+      case 'ROOM_STAY_CLAIM': {
+        const uid = String(meta.userId || msg.userId || '');
+        const roomId = String(msg.roomId || meta.roomId || '');
+        if (!uid || !roomId) break;
+        const room = rooms.get(roomId);
+        if (!room || !room.activeClients.has(uid)) break;
+
+        const nowMs = Date.now();
+        let track = userRoomStayTracking.get(uid);
+        if (!track || track.roomId !== roomId) {
+          track = { roomId, joinedAtMs: nowMs, lastClaimAtMs: nowMs };
+          userRoomStayTracking.set(uid, track);
+          safeSend(ws, buildLevelStatePayload(uid));
+          break;
+        }
+        if (nowMs - track.lastClaimAtMs < ROOM_STAY_MIN_ELAPSED_MS) {
+          // Too soon (anti-cheat interval guard)
+          safeSend(ws, buildLevelStatePayload(uid));
+          break;
+        }
+        track.lastClaimAtMs = nowMs;
+
+        const st = getOrCreateUserLevelState(uid);
+        const isOwnRoom = roomId === uid || room.hostId === uid;
+        if (isOwnRoom) {
+          const remaining = Math.max(0, ROOM_STAY_MAX_OWN_DAILY - st.dailyOwnRoomStayExp);
+          const gain = Math.min(ROOM_STAY_EXP_PER_STEP, remaining);
+          if (gain > 0) {
+            st.dailyOwnRoomStayExp += gain;
+            grantUserExp(uid, gain, 'ROOM_STAY_OWN');
+          } else {
+            safeSend(ws, buildLevelStatePayload(uid));
+          }
+        } else {
+          const remaining = Math.max(0, ROOM_STAY_MAX_OTHER_DAILY - st.dailyOtherRoomStayExp);
+          const gain = Math.min(ROOM_STAY_EXP_PER_STEP, remaining);
+          if (gain > 0) {
+            st.dailyOtherRoomStayExp += gain;
+            grantUserExp(uid, gain, 'ROOM_STAY_OTHER');
+          } else {
+            safeSend(ws, buildLevelStatePayload(uid));
+          }
+        }
         break;
       }
 
