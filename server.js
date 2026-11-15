@@ -60,12 +60,20 @@ const GREEDY_INITIAL_COINS = 0;
 const GREEDY_MAX_BALANCE = 500000000;
 const GREEDY_MAX_BETS_PER_ROUND = 40;
 const WALLET_RECHARGE_PACKS = {
-  p1: 800000,
-  p2: 3549000,
-  p3: 7099000,
-  p4: 17290000,
+  p1: { coins: 800000, priceInr: 100 },
+  p2: { coins: 3549000, priceInr: 500 },
+  p3: { coins: 7099000, priceInr: 1000 },
+  p4: { coins: 17290000, priceInr: 2500 },
 };
-const WALLET_EXCHANGE_COINS = new Set([330, 3300, 33000, 330000, 3300000]);
+const WALLET_EXCHANGE_DIAMOND_COST = {
+  330: 1000,
+  3300: 10000,
+  33000: 100000,
+  330000: 1000000,
+  3300000: 10000000,
+};
+const DAILY_CHECKIN_REWARD_COINS = 10;
+const WALLET_RECHARGE_COOLDOWN_MS = 4000;
 const GREEDY_HMAC_SECRET = process.env.GREEDY_HMAC_SECRET || crypto.randomBytes(32).toString('hex');
 
 const greedySubscribers = new Set(); // Only sockets actively viewing Greedy Baby
@@ -73,9 +81,149 @@ const greedyRoundBets = new Map();   // Map<roundNumber, Map<userId, { userId, n
 const greedyRecentChips = new Map(); // Map<roundNumber, Array<{ slotId, chipIndex, userId }>>
 const greedySettlements = new Map(); // Map<roundNumber, CachedSettlement>
 const greedyUserBalances = new Map(); // Map<userId, number> (Server-authoritative unified Wallet + Game coins)
+const userDiamonds = new Map();       // Map<userId, number> (Server-authoritative Diamonds earned from gifts)
+const walletTransactions = new Map(); // Map<userId, Array<{ id, type, title, amountText, date, createdAtMs, isAddition }>>
+const walletDailyCheckIns = new Map(); // Map<userId, string(YYYY-MM-DD)>
+const deviceDailyCheckIns = new Map(); // Map<deviceKey, string(YYYY-MM-DD)>
+const walletProcessedTxIds = new Map(); // Map<txId, { userId, amount, remainingGiftCoins, createdAtMs }>
+const walletLastRechargeAt = new Map(); // Map<userId, number>
 const greedyRoundBetCounts = new Map(); // Map<roundNumber, Map<userId, number>>
 const greedyLastBetAtMs = new Map(); // Map<userId, number>
-const greedyLastRewardAtMs = new Map(); // Map<userId, number>
+
+// ============================================================================
+// REAL-TIME ANTI-CHEAT MASTI STORE & MY ITEMS ("MINE") ENGINE
+// ============================================================================
+const STORE_DAY_MS = 24 * 60 * 60 * 1000;
+const STORE_DURATION_MULT = {
+  7: 1.0,
+  15: 1.8,
+  30: 3.0,
+};
+const STORE_CATALOG = {
+  // VEHICLE
+  v_phantom_car: { id: 'v_phantom_car', name: 'Phantom Supercar', category: 'VEHICLE', basePrice7Days: 15000 },
+  v_silver_roadster: { id: 'v_silver_roadster', name: 'Silver Roadster', category: 'VEHICLE', basePrice7Days: 10000 },
+  v_royal_crown_ride: { id: 'v_royal_crown_ride', name: 'Imperial Crown Chariot', category: 'VEHICLE', basePrice7Days: 25000 },
+  v_starlight_cruiser: { id: 'v_starlight_cruiser', name: 'Starlight Cruiser', category: 'VEHICLE', basePrice7Days: 12000 },
+  v_supersonic_jet: { id: 'v_supersonic_jet', name: 'Golden Sky Jet', category: 'VEHICLE', basePrice7Days: 30000 },
+  v_cupid_heart: { id: 'v_cupid_heart', name: 'Lover Heart Float', category: 'VEHICLE', basePrice7Days: 8000 },
+  // FRAME
+  f_3rd_anniversary: { id: 'f_3rd_anniversary', name: '3rd Anniversary Frame', category: 'FRAME', basePrice7Days: 12000 },
+  f_charm_crescent: { id: 'f_charm_crescent', name: 'Charm Star Frame', category: 'FRAME', basePrice7Days: 6000 },
+  f_cp_lover: { id: 'f_cp_lover', name: 'CP Lover Lv.1 Frame', category: 'FRAME', basePrice7Days: 9000 },
+  f_ornate_gold: { id: 'f_ornate_gold', name: 'Royal Ornate Gold', category: 'FRAME', basePrice7Days: 18000 },
+  // BUBBLE
+  b_purple_panther: { id: 'b_purple_panther', name: 'Purple Panther Bubble', category: 'BUBBLE', basePrice7Days: 8000 },
+  b_starlight_galaxy: { id: 'b_starlight_galaxy', name: 'Starlight Galaxy Bubble', category: 'BUBBLE', basePrice7Days: 5000 },
+  b_golden_combo: { id: 'b_golden_combo', name: 'Imperial Gold Bubble', category: 'BUBBLE', basePrice7Days: 10000 },
+  b_cp_romance: { id: 'b_cp_romance', name: 'CP Sweetheart Bubble', category: 'BUBBLE', basePrice7Days: 6500 },
+  // MIC_WAVE
+  w_emerald_pulse: { id: 'w_emerald_pulse', name: 'Emerald Neon Wave', category: 'MIC_WAVE', basePrice7Days: 6000 },
+  w_golden_crown_wave: { id: 'w_golden_crown_wave', name: 'Royal Gold Wave', category: 'MIC_WAVE', basePrice7Days: 12000 },
+  w_cyber_violet_wave: { id: 'w_cyber_violet_wave', name: 'Cyber Violet Wave', category: 'MIC_WAVE', basePrice7Days: 8500 },
+  w_rose_lover_wave: { id: 'w_rose_lover_wave', name: 'Romantic Rose Wave', category: 'MIC_WAVE', basePrice7Days: 7500 },
+  // SPECIAL_ID
+  sid_888888: { id: 'sid_888888', name: 'SID: 888888', category: 'SPECIAL_ID', basePrice7Days: 50000, specialIdNumber: '888888' },
+  sid_999999: { id: 'sid_999999', name: 'SID: 999999', category: 'SPECIAL_ID', basePrice7Days: 50000, specialIdNumber: '999999' },
+  sid_777777: { id: 'sid_777777', name: 'SID: 777777', category: 'SPECIAL_ID', basePrice7Days: 35000, specialIdNumber: '777777' },
+  sid_5201314: { id: 'sid_5201314', name: 'ID: 5201314', category: 'SPECIAL_ID', basePrice7Days: 20000, specialIdNumber: '5201314' },
+  sid_100001: { id: 'sid_100001', name: 'ID: 100001', category: 'SPECIAL_ID', basePrice7Days: 15000, specialIdNumber: '100001' },
+  sid_112233: { id: 'sid_112233', name: 'ID: 112233', category: 'SPECIAL_ID', basePrice7Days: 10000, specialIdNumber: '112233' },
+};
+const userStoreInventories = new Map(); // Map<userId, { items: Map<itemId, ...>, equipped: { VEHICLE, FRAME, BUBBLE, MIC_WAVE, SPECIAL_ID } }>
+const storeProcessedOrderIds = new Map(); // Map<orderId, number>
+const storeLastActionAt = new Map(); // Map<userId, number>
+const STORE_ACTION_COOLDOWN_MS = 1200;
+
+function getOrCreateStoreInventory(uid) {
+  let inv = userStoreInventories.get(uid);
+  if (!inv) {
+    inv = {
+      items: new Map(),
+      equipped: {
+        VEHICLE: null,
+        FRAME: null,
+        BUBBLE: null,
+        MIC_WAVE: null,
+        SPECIAL_ID: null,
+      },
+    };
+    userStoreInventories.set(uid, inv);
+  }
+  return inv;
+}
+
+function pruneAndSyncUserStore(uid, nowMs = Date.now()) {
+  const inv = getOrCreateStoreInventory(uid);
+  for (const [itemId, entry] of inv.items.entries()) {
+    if (!entry || Number(entry.expiresAtMs || 0) <= nowMs || !STORE_CATALOG[itemId]) {
+      inv.items.delete(itemId);
+    }
+  }
+  for (const cat of Object.keys(inv.equipped)) {
+    const eqId = inv.equipped[cat];
+    if (eqId && !inv.items.has(eqId)) {
+      inv.equipped[cat] = null;
+    }
+  }
+  const prof = users.get(uid);
+  if (prof) {
+    const eqVehicleId = inv.equipped.VEHICLE || '';
+    const eqVehicleSpec = eqVehicleId ? STORE_CATALOG[eqVehicleId] : null;
+    const eqSidId = inv.equipped.SPECIAL_ID || '';
+    const eqSidSpec = eqSidId ? STORE_CATALOG[eqSidId] : null;
+    prof.equippedFrameId = inv.equipped.FRAME || '';
+    prof.equippedVehicleId = eqVehicleId;
+    prof.equippedVehicleName = eqVehicleSpec ? eqVehicleSpec.name : '';
+    prof.equippedBubbleId = inv.equipped.BUBBLE || '';
+    prof.equippedMicWaveId = inv.equipped.MIC_WAVE || '';
+    prof.equippedSpecialId = eqSidSpec ? eqSidSpec.specialIdNumber : '';
+    users.set(uid, prof);
+  }
+  return inv;
+}
+
+function buildStoreStatePayload(uid, integrity = null) {
+  const nowMs = Date.now();
+  const inv = pruneAndSyncUserStore(uid, nowMs);
+  const ownedItems = Array.from(inv.items.values())
+    .sort((a, b) => Number(b.purchasedAtMs || 0) - Number(a.purchasedAtMs || 0))
+    .map((entry) => ({
+      itemId: entry.itemId,
+      category: entry.category,
+      expiresAtMs: Number(entry.expiresAtMs || 0),
+      totalDaysPurchased: Number(entry.totalDaysPurchased || 7),
+      purchasedAtMs: Number(entry.purchasedAtMs || nowMs),
+      isEquipped: inv.equipped[entry.category] === entry.itemId,
+      giftedById: entry.giftedById || '',
+      giftedByName: entry.giftedByName || '',
+    }));
+  const effIntegrity = integrity || users.get(uid)?.lastIntegrity || null;
+  const isCloned = Boolean(effIntegrity && effIntegrity.isClonedEnvironment);
+  return {
+    type: 'STORE_STATE_SYNC',
+    userId: uid,
+    serverNowMs: nowMs,
+    ownedItems,
+    equipped: { ...inv.equipped },
+    securityVerified: !isCloned,
+    securityReason: isCloned ? (effIntegrity?.reasons?.[0] || 'CLONE_DETECTED') : '',
+  };
+}
+
+function pushStoreSyncToUser(uid) {
+  if (!uid || !userSockets.has(uid)) return;
+  sendToUser(uid, buildStoreStatePayload(uid));
+}
+
+function pruneStoreOrderCache(nowMs = Date.now()) {
+  if (storeProcessedOrderIds.size < 4000) return;
+  for (const [key, ts] of storeProcessedOrderIds.entries()) {
+    if (nowMs - Number(ts || 0) > 3600000) {
+      storeProcessedOrderIds.delete(key);
+    }
+  }
+}
 let greedyDayIndex = Math.floor(Date.now() / 86400000);
 let greedyTodayLeaderboard = new Map(); // Map<userId, { userId, userName, avatarUri, winCoins }>
 let greedyYesterdayLeaderboard = new Map();
@@ -93,22 +241,103 @@ function ensureGreedyDayFresh() {
   }
 }
 
-function getOrInitGreedyBalance(userId, clientBalanceHint = null) {
+function getOrInitGreedyBalance(userId) {
   if (!userId) return GREEDY_INITIAL_COINS;
-  const parsedHint = Number(clientBalanceHint);
-  const hasValidHint = Number.isFinite(parsedHint) && parsedHint >= 0 && parsedHint <= GREEDY_MAX_BALANCE;
   if (!greedyUserBalances.has(userId)) {
-    const startBal = hasValidHint ? Math.floor(parsedHint) : GREEDY_INITIAL_COINS;
-    greedyUserBalances.set(userId, startBal);
-    return startBal;
+    greedyUserBalances.set(userId, GREEDY_INITIAL_COINS);
+    return GREEDY_INITIAL_COINS;
   }
-  const curBal = greedyUserBalances.get(userId);
-  // Only allow passive clientBalanceHint to adjust DOWNWARD; upward wallet changes must use WALLET_* handlers.
-  if (hasValidHint && Math.floor(parsedHint) < curBal) {
-    greedyUserBalances.set(userId, Math.floor(parsedHint));
-    return Math.floor(parsedHint);
+  return greedyUserBalances.get(userId);
+}
+
+function getOrInitDiamondsBalance(userId) {
+  if (!userId) return 0;
+  if (!userDiamonds.has(userId)) {
+    userDiamonds.set(userId, 0);
+    return 0;
   }
-  return curBal;
+  return userDiamonds.get(userId);
+}
+
+function recordWalletTx(uid, type, title, amountText, isAddition, customId = null) {
+  if (!uid) return;
+  const list = walletTransactions.get(uid) || [];
+  const tx = {
+    id: customId || `wtx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type,
+    title: String(title || 'Wallet Transaction').slice(0, 96),
+    amountText: String(amountText || ''),
+    date: 'Just now',
+    createdAtMs: Date.now(),
+    isAddition: Boolean(isAddition),
+  };
+  list.unshift(tx);
+  if (list.length > 60) {
+    list.length = 60;
+  }
+  walletTransactions.set(uid, list);
+}
+
+function getTodayDateKeyIst() {
+  const istMs = Date.now() + 19800000;
+  return new Date(istMs).toISOString().slice(0, 10);
+}
+
+function buildWalletStatePayload(uid, integrity = null) {
+  const coinsBalance = getOrInitGreedyBalance(uid);
+  const diamondsBalance = getOrInitDiamondsBalance(uid);
+  const txs = walletTransactions.get(uid) || [];
+  const todayKey = getTodayDateKeyIst();
+  const dailyCheckInDone = walletDailyCheckIns.get(uid) === todayKey;
+  const effIntegrity = integrity || users.get(uid)?.lastIntegrity || null;
+  const isCloned = Boolean(effIntegrity && effIntegrity.isClonedEnvironment);
+  return {
+    type: 'WALLET_STATE_SYNC',
+    userId: uid,
+    coinsBalance,
+    serverBalance: coinsBalance,
+    diamondsBalance,
+    dailyCheckInDone,
+    securityVerified: !isCloned,
+    securityReason: isCloned ? (effIntegrity?.reasons?.[0] || 'CLONE_DETECTED') : '',
+    serverTimeMs: Date.now(),
+    transactions: txs,
+  };
+}
+
+function pushWalletSyncToUser(uid) {
+  if (!uid || !userSockets.has(uid)) return;
+  const payload = buildWalletStatePayload(uid);
+  sendToUser(uid, payload);
+  sendToUser(uid, { type: 'WALLET_BALANCE_SYNC', serverBalance: payload.coinsBalance });
+}
+
+function validateIntegrityForWallet(uid, integrity) {
+  if (!integrity) {
+    return { ok: true };
+  }
+  if (integrity.isClonedEnvironment) {
+    return {
+      ok: false,
+      error: `Clone / Dual-App detected (${(integrity.reasons || []).join(', ') || 'CLONE'}). Wallet actions are disabled.`,
+    };
+  }
+  if (integrity.packageName && integrity.packageName !== 'com.aistudio.justfun.masti') {
+    return {
+      ok: false,
+      error: 'Tampered app package detected. Please install the official JustFun app.',
+    };
+  }
+  return { ok: true };
+}
+
+function pruneWalletTxCache(now = Date.now()) {
+  if (walletProcessedTxIds.size < 4000) return;
+  for (const [key, entry] of walletProcessedTxIds.entries()) {
+    if (now - Number(entry.createdAtMs || 0) > 3600000) {
+      walletProcessedTxIds.delete(key);
+    }
+  }
 }
 
 function getGreedyCurrentRoundInfo(nowMs = Date.now()) {
@@ -390,6 +619,9 @@ function buildUserSummary(u, viewerId = '') {
     equippedFrameId: u.equippedFrameId || '',
     equippedVehicleId: u.equippedVehicleId || '',
     equippedVehicleName: u.equippedVehicleName || '',
+    equippedBubbleId: u.equippedBubbleId || '',
+    equippedMicWaveId: u.equippedMicWaveId || '',
+    equippedSpecialId: u.equippedSpecialId || '',
     unlockedMedalIds: Array.isArray(u.unlockedMedalIds) ? u.unlockedMedalIds : [],
     receivedGifts: Array.isArray(u.receivedGifts) ? u.receivedGifts : [],
     photos: Array.isArray(u.photos) ? u.photos.slice(0, 6) : [],
@@ -809,7 +1041,14 @@ function grantUserExp(uid, expGain, reason = 'EXP') {
     const curBal = getOrInitGreedyBalance(uid);
     const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + milestoneCoinsAdded);
     greedyUserBalances.set(uid, newBal);
-    sendToUser(uid, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+    recordWalletTx(
+      uid,
+      'COIN_USAGE',
+      `Level Up Reward (Lv.${unlockedMilestones[unlockedMilestones.length - 1] ?? st.level})`,
+      `+${milestoneCoinsAdded.toLocaleString('en-US')} Coins`,
+      true
+    );
+    pushWalletSyncToUser(uid);
   }
 
   const prof = users.get(uid);
@@ -839,6 +1078,277 @@ function grantUserExp(uid, expGain, reason = 'EXP') {
     leveledUp: st.level > prevLevel,
     milestoneCoinsAdded,
   };
+}
+
+// ============================================================================
+// REAL-TIME ANTI-CHEAT & NON-CLONE INVITE REWARDS ENGINE
+// ============================================================================
+const INVITE_FRIEND_WELCOME_COINS = 250000;
+const INVITE_DAY1_COINS = 150000;
+const INVITE_DAY3_COINS = 100000;
+const INVITE_DAY3_DELAY_MS = 48 * 60 * 60 * 1000;
+const INVITE_RECHARGE_THRESHOLD = 500000;
+const INVITE_RECHARGE_BONUS_COINS = 250000;
+const INVITE_GIFT_REBATE_RATE = 0.05;
+const INVITE_COMMISSION_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+
+const userInviteLedgers = new Map();     // Map<userId, InviteLedger>
+const deviceInviteClaims = new Map();    // Map<fingerprintKey, { firstUserId, boundInviterId, boundAtMs }>
+const userKnownDevices = new Map();      // Map<userId, Set<fingerprintKey>>
+const deviceUserAccounts = new Map();    // Map<fingerprintKey, Set<userId>>
+const inviteBindRateLimits = new Map();  // Map<userId, Array<timestampMs>>
+const inviteTickerHistory = [];          // Array<{ id, userName, coins, reason, createdAtMs }>
+
+function getOrCreateInviteLedger(uid) {
+  if (!uid) return null;
+  let ledger = userInviteLedgers.get(uid);
+  if (!ledger) {
+    ledger = {
+      boundInviterId: null,
+      boundAtMs: 0,
+      day3Credited: false,
+      friendRechargedTotal: 0,
+      rechargeBonusCredited: false,
+      giftRebateTotal: 0,
+      withdrawableCoins: 0,
+      totalCoinsRewarded: 0,
+      invitedFriends: new Map(), // Map<friendId, Record>
+    };
+    userInviteLedgers.set(uid, ledger);
+  }
+  return ledger;
+}
+
+function getDeviceKeysFromIntegrity(integrity) {
+  if (!integrity || typeof integrity !== 'object') return [];
+  const keys = [];
+  const fp = String(integrity.deviceFingerprint || '').trim();
+  const drm = String(integrity.mediaDrmHash || '').trim();
+  if (fp) keys.push(`fp:${fp}`);
+  if (drm) keys.push(`drm:${drm}`);
+  return keys;
+}
+
+function recordUserDeviceIntegrity(uid, integrity) {
+  if (!uid || !integrity || typeof integrity !== 'object') return;
+  const keys = getDeviceKeysFromIntegrity(integrity);
+  if (keys.length === 0) return;
+
+  let uDevs = userKnownDevices.get(uid);
+  if (!uDevs) {
+    uDevs = new Set();
+    userKnownDevices.set(uid, uDevs);
+  }
+  keys.forEach((k) => {
+    uDevs.add(k);
+    let dUsers = deviceUserAccounts.get(k);
+    if (!dUsers) {
+      dUsers = new Set();
+      deviceUserAccounts.set(k, dUsers);
+    }
+    dUsers.add(uid);
+  });
+
+  const existing = users.get(uid);
+  if (existing) {
+    existing.lastIntegrity = {
+      isClonedEnvironment: Boolean(integrity.isClonedEnvironment),
+      isEmulator: Boolean(integrity.isEmulator),
+      reasons: Array.isArray(integrity.reasons) ? integrity.reasons.slice(0, 6) : [],
+      updatedAtMs: Date.now(),
+    };
+    users.set(uid, existing);
+  }
+}
+
+function isDeviceAlreadyClaimedForKeys(keys) {
+  for (const k of keys) {
+    if (deviceInviteClaims.has(k)) return true;
+  }
+  return false;
+}
+
+function shareSameDevice(uidA, uidB, currentKeys = []) {
+  const devsA = new Set([...(userKnownDevices.get(uidA) || []), ...currentKeys]);
+  const devsB = userKnownDevices.get(uidB);
+  if (!devsB || devsA.size === 0) return false;
+  for (const k of devsA) {
+    if (devsB.has(k)) return true;
+  }
+  return false;
+}
+
+function validateIntegrityForInvite(integrity) {
+  if (!integrity || typeof integrity !== 'object') {
+    return { ok: false, error: 'Device integrity check missing. Please restart the app.' };
+  }
+  if (integrity.isClonedEnvironment) {
+    const reasonCode = Array.isArray(integrity.reasons) && integrity.reasons.length > 0
+      ? integrity.reasons[0]
+      : 'CLONE_DETECTED';
+    return {
+      ok: false,
+      error: `Clone / Dual-App detected (${reasonCode}). Invite rewards are only allowed on the official non-cloned app.`,
+    };
+  }
+  if (integrity.isEmulator) {
+    return {
+      ok: false,
+      error: 'Emulators are blocked from invite rewards by anti-cheat policy.',
+    };
+  }
+  const keys = getDeviceKeysFromIntegrity(integrity);
+  if (keys.length === 0) {
+    return {
+      ok: false,
+      error: 'Hardware device verification failed. Please retry on a physical device.',
+    };
+  }
+  return { ok: true, keys };
+}
+
+function pushInviteTicker(userName, coins, reason) {
+  if (!userName || !Number.isFinite(coins) || coins <= 0) return;
+  const entry = {
+    id: `itk_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    userName: String(userName).slice(0, 32),
+    coins: Math.floor(coins),
+    reason: String(reason || 'INVITE'),
+    createdAtMs: Date.now(),
+  };
+  inviteTickerHistory.unshift(entry);
+  if (inviteTickerHistory.length > 30) {
+    inviteTickerHistory.splice(30);
+  }
+  const payload = JSON.stringify({
+    type: 'INVITE_TICKER_UPDATE',
+    entry,
+    tickers: inviteTickerHistory.slice(0, 15),
+  });
+  for (const sockets of userSockets.values()) {
+    for (const client of sockets) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(payload);
+      }
+    }
+  }
+}
+
+function buildInviteStatePayload(uid, integrity = null) {
+  const ledger = getOrCreateInviteLedger(uid);
+  const keys = getDeviceKeysFromIntegrity(integrity);
+  const deviceClaimed = keys.length > 0 ? isDeviceAlreadyClaimedForKeys(keys) : false;
+  const invitedList = Array.from(ledger.invitedFriends.values())
+    .sort((a, b) => Number(b.boundAtMs || 0) - Number(a.boundAtMs || 0));
+
+  const boundInviterProfile = ledger.boundInviterId ? users.get(ledger.boundInviterId) : null;
+
+  return {
+    type: 'INVITE_STATE_SYNC',
+    userId: uid,
+    myInviteCode: uid,
+    coinsToWithdraw: Math.max(0, Math.floor(ledger.withdrawableCoins)),
+    numberOfInvitations: invitedList.length,
+    totalCoinsRewarded: Math.max(0, Math.floor(ledger.totalCoinsRewarded)),
+    isCodeBound: Boolean(ledger.boundInviterId),
+    boundInviterId: ledger.boundInviterId || '',
+    boundInviterName: boundInviterProfile?.nickname || '',
+    isDeviceAlreadyClaimed: deviceClaimed || Boolean(ledger.boundInviterId),
+    invitedFriends: invitedList,
+    tickers: inviteTickerHistory.slice(0, 15),
+  };
+}
+
+function pushInviteSyncToUser(uid, integrity = null) {
+  if (!uid || !userSockets.has(uid)) return;
+  sendToUser(uid, buildInviteStatePayload(uid, integrity));
+}
+
+function evaluateInviteDay3Retention(uid, integrity = null) {
+  if (!uid) return;
+  const ledger = userInviteLedgers.get(uid);
+  if (!ledger || !ledger.boundInviterId || ledger.day3Credited) return;
+  if (Date.now() - Number(ledger.boundAtMs || 0) < INVITE_DAY3_DELAY_MS) return;
+
+  if (integrity && (integrity.isClonedEnvironment || integrity.isEmulator)) return;
+
+  ledger.day3Credited = true;
+  const inviterId = ledger.boundInviterId;
+  const inviterLedger = getOrCreateInviteLedger(inviterId);
+  if (!inviterLedger) return;
+
+  const rec = inviterLedger.invitedFriends.get(uid);
+  if (rec && !rec.day3Credited) {
+    rec.day3Credited = true;
+    rec.coinsRewarded = Number(rec.coinsRewarded || 0) + INVITE_DAY3_COINS;
+    inviterLedger.invitedFriends.set(uid, rec);
+  }
+  inviterLedger.withdrawableCoins += INVITE_DAY3_COINS;
+  inviterLedger.totalCoinsRewarded += INVITE_DAY3_COINS;
+
+  const inviterName = users.get(inviterId)?.nickname || `User ${inviterId}`;
+  pushInviteTicker(inviterName, INVITE_DAY3_COINS, 'DAY3_LOGIN');
+  pushInviteSyncToUser(inviterId);
+  pushInviteSyncToUser(uid, integrity);
+}
+
+function creditInviteRechargeProgress(uid, packCoins) {
+  if (!uid || !Number.isFinite(packCoins) || packCoins <= 0) return;
+  const ledger = userInviteLedgers.get(uid);
+  if (!ledger || !ledger.boundInviterId) return;
+
+  const u = users.get(uid);
+  if (u?.lastIntegrity?.isClonedEnvironment || u?.lastIntegrity?.isEmulator) return;
+
+  ledger.friendRechargedTotal = Number(ledger.friendRechargedTotal || 0) + Math.floor(packCoins);
+  const inviterId = ledger.boundInviterId;
+  const inviterLedger = getOrCreateInviteLedger(inviterId);
+  const rec = inviterLedger.invitedFriends.get(uid);
+  if (rec) {
+    rec.rechargeCoins = ledger.friendRechargedTotal;
+  }
+
+  if (!ledger.rechargeBonusCredited && ledger.friendRechargedTotal >= INVITE_RECHARGE_THRESHOLD) {
+    ledger.rechargeBonusCredited = true;
+    if (rec) {
+      rec.hasRecharged = true;
+      rec.coinsRewarded = Number(rec.coinsRewarded || 0) + INVITE_RECHARGE_BONUS_COINS;
+    }
+    inviterLedger.withdrawableCoins += INVITE_RECHARGE_BONUS_COINS;
+    inviterLedger.totalCoinsRewarded += INVITE_RECHARGE_BONUS_COINS;
+    const inviterName = users.get(inviterId)?.nickname || `User ${inviterId}`;
+    pushInviteTicker(inviterName, INVITE_RECHARGE_BONUS_COINS, 'FRIEND_RECHARGE');
+  }
+
+  if (rec) {
+    inviterLedger.invitedFriends.set(uid, rec);
+  }
+  pushInviteSyncToUser(inviterId);
+}
+
+function creditInviteGiftCommission(fromUserId, coinsSpent) {
+  if (!fromUserId || !Number.isFinite(coinsSpent) || coinsSpent <= 0) return;
+  const ledger = userInviteLedgers.get(fromUserId);
+  if (!ledger || !ledger.boundInviterId) return;
+  if (Date.now() - Number(ledger.boundAtMs || 0) > INVITE_COMMISSION_WINDOW_MS) return;
+
+  const rebate = Math.floor(coinsSpent * INVITE_GIFT_REBATE_RATE);
+  if (rebate <= 0) return;
+
+  const inviterId = ledger.boundInviterId;
+  const inviterLedger = getOrCreateInviteLedger(inviterId);
+  ledger.giftRebateTotal = Number(ledger.giftRebateTotal || 0) + rebate;
+
+  const rec = inviterLedger.invitedFriends.get(fromUserId);
+  if (rec) {
+    rec.hasSentGifts = true;
+    rec.giftCoinsReward = Number(rec.giftCoinsReward || 0) + rebate;
+    rec.coinsRewarded = Number(rec.coinsRewarded || 0) + rebate;
+    inviterLedger.invitedFriends.set(fromUserId, rec);
+  }
+  inviterLedger.withdrawableCoins += rebate;
+  inviterLedger.totalCoinsRewarded += rebate;
+  pushInviteSyncToUser(inviterId);
 }
 
 const ROCKET_TARGETS = {
@@ -1265,8 +1775,16 @@ wss.on('connection', (ws) => {
           updatedAt: Date.now(),
         };
         users.set(uid, merged);
-        safeSend(ws, { type: 'USER_REGISTERED', profile: merged });
+        pruneAndSyncUserStore(uid);
+        if (msg.deviceIntegrity) {
+          recordUserDeviceIntegrity(uid, msg.deviceIntegrity);
+        }
+        evaluateInviteDay3Retention(uid, msg.deviceIntegrity || null);
+        safeSend(ws, { type: 'USER_REGISTERED', profile: users.get(uid) || merged });
         safeSend(ws, buildSocialSnapshotForUser(uid));
+        safeSend(ws, buildInviteStatePayload(uid, msg.deviceIntegrity || null));
+        safeSend(ws, buildWalletStatePayload(uid, msg.deviceIntegrity || null));
+        safeSend(ws, buildStoreStatePayload(uid, msg.deviceIntegrity || null));
         break;
       }
 
@@ -1559,8 +2077,45 @@ wss.on('connection', (ws) => {
         const fromUserId = String(msg.fromUserId || meta.userId || '');
         const targetUserId = String(msg.targetUserId || '');
         const roomId = String(msg.roomId || '');
-        const charmDelta = Number(msg.charmDelta || 0);
-        const coinsSpent = Number(msg.coinsSpent || charmDelta);
+        const charmDelta = Math.max(0, Math.floor(Number(msg.charmDelta || 0)));
+        const coinsSpent = Math.max(0, Math.floor(Number(msg.coinsSpent || charmDelta)));
+        if (!fromUserId || coinsSpent <= 0) break;
+        if (meta.userId && fromUserId !== meta.userId) break;
+
+        // Authoritative balance check / pre-paid spend tx linkage (prevents free gifts & double deduction)
+        const prePaidTxId = msg.prePaidTxId ? String(msg.prePaidTxId) : '';
+        let authorizedSpend = false;
+        if (prePaidTxId && walletProcessedTxIds.has(prePaidTxId)) {
+          const txEntry = walletProcessedTxIds.get(prePaidTxId);
+          if (txEntry && txEntry.userId === fromUserId && Number(txEntry.remainingGiftCoins || 0) >= coinsSpent) {
+            txEntry.remainingGiftCoins -= coinsSpent;
+            walletProcessedTxIds.set(prePaidTxId, txEntry);
+            authorizedSpend = true;
+          }
+        }
+        if (!authorizedSpend) {
+          const senderBal = getOrInitGreedyBalance(fromUserId);
+          if (senderBal < coinsSpent) {
+            safeSend(ws, {
+              type: 'WALLET_ACTION_RESULT',
+              action: 'SPEND',
+              success: false,
+              error: 'Insufficient Coins balance for gift!',
+            });
+            pushWalletSyncToUser(fromUserId);
+            break;
+          }
+          greedyUserBalances.set(fromUserId, senderBal - coinsSpent);
+          recordWalletTx(
+            fromUserId,
+            'COIN_USAGE',
+            `Gift: ${msg.giftName || 'Gift'} x${Number(msg.giftCount || 1)}`,
+            `-${coinsSpent.toLocaleString('en-US')} Coins`,
+            false
+          );
+          pushWalletSyncToUser(fromUserId);
+        }
+
         if (targetUserId && charmDelta > 0) {
           const existing = users.get(targetUserId) || { userId: targetUserId, user8DigitId: targetUserId };
           existing.totalCharmPoints = Number(existing.totalCharmPoints || 0) + charmDelta;
@@ -1587,10 +2142,25 @@ wss.on('connection', (ws) => {
           }
           users.set(targetUserId, existing);
           pushSocialSyncToUser(targetUserId);
+
+          // Credit authoritative Diamonds to receiver (1 Coin gift = 1 Diamond, exchange = 33%)
+          if (targetUserId !== fromUserId && coinsSpent > 0) {
+            const curDiamonds = getOrInitDiamondsBalance(targetUserId);
+            userDiamonds.set(targetUserId, curDiamonds + coinsSpent);
+            recordWalletTx(
+              targetUserId,
+              'DIAMOND_INCOME',
+              `Gift Income: ${msg.giftName || 'Gift'} x${Number(msg.giftCount || 1)}`,
+              `+${coinsSpent.toLocaleString('en-US')} Diamonds`,
+              true
+            );
+            pushWalletSyncToUser(targetUserId);
+          }
         }
         if (fromUserId && coinsSpent > 0) {
           const giftSendExp = Math.max(1, Math.floor(coinsSpent / 5));
           grantUserExp(fromUserId, giftSendExp, 'GIFT_SEND');
+          creditInviteGiftCommission(fromUserId, coinsSpent);
         }
         if (roomId && coinsSpent > 0) {
           const room = rooms.get(roomId);
@@ -1655,10 +2225,27 @@ wss.on('connection', (ws) => {
                 });
                 rs.history = rs.history.slice(0, 30);
 
-                // Credit Rocket 15x EXP to Top 1-3 contributors authoritatively
+                // Credit Rocket 15x EXP AND Rocket Blast Coins authoritatively on server
                 for (const [winnerUid, expAmt] of Object.entries(expByUser)) {
                   if (Number(expAmt) > 0) {
                     grantUserExp(winnerUid, Number(expAmt), `ROCKET_L${lvl}`);
+                  }
+                }
+                for (const [winnerUid, coinAmtRaw] of Object.entries(rewardsByUser)) {
+                  const coinAmt = Math.floor(Number(coinAmtRaw || 0));
+                  if (coinAmt > 0) {
+                    const prevB = getOrInitGreedyBalance(winnerUid);
+                    const nextB = Math.min(GREEDY_MAX_BALANCE, prevB + coinAmt);
+                    greedyUserBalances.set(winnerUid, nextB);
+                    recordWalletTx(
+                      winnerUid,
+                      'COIN_USAGE',
+                      `Lv.${lvl} Rocket Blast Reward`,
+                      `+${coinAmt.toLocaleString('en-US')} Coins`,
+                      true,
+                      `rocket_win_${launchId}_${winnerUid}`
+                    );
+                    pushWalletSyncToUser(winnerUid);
                   }
                 }
 
@@ -2114,54 +2701,214 @@ wss.on('connection', (ws) => {
         const uid = String(meta.userId || msg.userId || '');
         if (!uid) break;
         if (!meta.userId) meta.userId = uid;
-        const serverBalance = getOrInitGreedyBalance(uid, msg.clientBalance);
-        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance });
+        if (msg.deviceIntegrity) {
+          recordUserDeviceIntegrity(uid, msg.deviceIntegrity);
+        }
+        safeSend(ws, buildWalletStatePayload(uid, msg.deviceIntegrity || null));
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: getOrInitGreedyBalance(uid) });
+        break;
+      }
+
+      case 'WALLET_DAILY_CHECKIN': {
+        const uid = String(meta.userId || msg.userId || '');
+        const integrity = msg.deviceIntegrity || null;
+        if (!uid) break;
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!meta.userId) meta.userId = uid;
+
+        if (integrity) recordUserDeviceIntegrity(uid, integrity);
+        const check = validateIntegrityForWallet(uid, integrity);
+        if (!check.ok) {
+          safeSend(ws, { type: 'WALLET_ACTION_RESULT', action: 'CHECKIN', success: false, error: check.error });
+          break;
+        }
+
+        const todayKey = getTodayDateKeyIst();
+        if (walletDailyCheckIns.get(uid) === todayKey) {
+          safeSend(ws, { type: 'WALLET_ACTION_RESULT', action: 'CHECKIN', success: false, error: 'Already checked in today!' });
+          safeSend(ws, buildWalletStatePayload(uid, integrity));
+          break;
+        }
+        const devKeys = getDeviceKeysFromIntegrity(integrity);
+        if (devKeys.some((dk) => deviceDailyCheckIns.get(dk) === todayKey)) {
+          safeSend(ws, { type: 'WALLET_ACTION_RESULT', action: 'CHECKIN', success: false, error: 'Daily check-in already claimed on this device today.' });
+          break;
+        }
+
+        walletDailyCheckIns.set(uid, todayKey);
+        devKeys.forEach((dk) => deviceDailyCheckIns.set(dk, todayKey));
+
+        const curBal = getOrInitGreedyBalance(uid);
+        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + DAILY_CHECKIN_REWARD_COINS);
+        greedyUserBalances.set(uid, newBal);
+        recordWalletTx(uid, 'COIN_USAGE', 'Daily Check-In Bonus', `+${DAILY_CHECKIN_REWARD_COINS} Coins`, true, `checkin_${uid}_${todayKey}`);
+
+        safeSend(ws, buildWalletStatePayload(uid, integrity));
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        safeSend(ws, { type: 'WALLET_ACTION_RESULT', action: 'CHECKIN', success: true, message: `Daily Check-In +${DAILY_CHECKIN_REWARD_COINS} Coins credited!` });
         break;
       }
 
       case 'WALLET_CREDIT_PACK': {
         const uid = String(meta.userId || msg.userId || '');
+        const integrity = msg.deviceIntegrity || null;
         if (!uid) break;
         if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
         if (!meta.userId) meta.userId = uid;
-        const packCoins = WALLET_RECHARGE_PACKS[String(msg.packId || '')];
-        if (!packCoins) break;
+        if (integrity) recordUserDeviceIntegrity(uid, integrity);
+
+        const check = validateIntegrityForWallet(uid, integrity);
+        if (!check.ok) {
+          safeSend(ws, { type: 'WALLET_RECHARGE_RESULT', success: false, error: check.error });
+          break;
+        }
+
+        const packId = String(msg.packId || '');
+        const packSpec = WALLET_RECHARGE_PACKS[packId];
+        if (!packSpec) {
+          safeSend(ws, { type: 'WALLET_RECHARGE_RESULT', success: false, error: 'Invalid recharge package.' });
+          break;
+        }
+
+        const channel = ['PhonePe', 'Paytm', 'UPI', 'GPay'].includes(String(msg.channel || ''))
+          ? String(msg.channel)
+          : 'UPI';
+
+        const now = Date.now();
+        pruneWalletTxCache(now);
+        const orderId = String(msg.clientOrderId || '').trim();
+        if (!orderId || orderId.length < 8) {
+          safeSend(ws, { type: 'WALLET_RECHARGE_RESULT', success: false, error: 'Missing valid order reference.' });
+          break;
+        }
+        if (walletProcessedTxIds.has(`rc_${orderId}`)) {
+          safeSend(ws, { type: 'WALLET_RECHARGE_RESULT', success: false, error: 'Duplicate order blocked by anti-cheat.' });
+          safeSend(ws, buildWalletStatePayload(uid, integrity));
+          break;
+        }
+
+        const prevRcAt = walletLastRechargeAt.get(uid) || 0;
+        if (now - prevRcAt < WALLET_RECHARGE_COOLDOWN_MS) {
+          safeSend(ws, { type: 'WALLET_RECHARGE_RESULT', success: false, error: 'Please wait a few seconds between recharges.' });
+          break;
+        }
+
+        walletProcessedTxIds.set(`rc_${orderId}`, { userId: uid, amount: packSpec.coins, remainingGiftCoins: 0, createdAtMs: now });
+        walletLastRechargeAt.set(uid, now);
+
         const curBal = getOrInitGreedyBalance(uid);
-        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + packCoins);
+        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + packSpec.coins);
         greedyUserBalances.set(uid, newBal);
+
+        recordWalletTx(
+          uid,
+          'COIN_RECHARGE',
+          `Recharge Coins (${channel})`,
+          `+${packSpec.coins.toLocaleString('en-US')} Coins (₹${packSpec.priceInr.toFixed(1)})`,
+          true,
+          `rc_rec_${orderId}`
+        );
+        recordWalletTx(
+          uid,
+          'COIN_USAGE',
+          'Account Recharge',
+          `+${packSpec.coins.toLocaleString('en-US')} Coins`,
+          true,
+          `rc_use_${orderId}`
+        );
+
+        creditInviteRechargeProgress(uid, packSpec.coins);
+        safeSend(ws, buildWalletStatePayload(uid, integrity));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        safeSend(ws, {
+          type: 'WALLET_RECHARGE_RESULT',
+          success: true,
+          packId,
+          orderId,
+          coinsAdded: packSpec.coins,
+          priceInr: packSpec.priceInr,
+          channel,
+          message: `Recharged ₹${packSpec.priceInr.toFixed(1)} (+${packSpec.coins.toLocaleString('en-US')} Coins) via ${channel}!`,
+        });
         break;
       }
 
       case 'WALLET_EXCHANGE_DIAMONDS': {
         const uid = String(meta.userId || msg.userId || '');
+        const integrity = msg.deviceIntegrity || null;
         if (!uid) break;
         if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
         if (!meta.userId) meta.userId = uid;
+        if (integrity) recordUserDeviceIntegrity(uid, integrity);
+
+        const check = validateIntegrityForWallet(uid, integrity);
+        if (!check.ok) {
+          safeSend(ws, { type: 'WALLET_EXCHANGE_RESULT', success: false, error: check.error });
+          break;
+        }
+
         const exCoins = Number(msg.coins);
-        if (!Number.isInteger(exCoins) || !WALLET_EXCHANGE_COINS.has(exCoins)) break;
+        const requiredDiamonds = WALLET_EXCHANGE_DIAMOND_COST[exCoins];
+        if (!Number.isInteger(exCoins) || !requiredDiamonds) {
+          safeSend(ws, { type: 'WALLET_EXCHANGE_RESULT', success: false, error: 'Invalid exchange package.' });
+          break;
+        }
+
+        const curDiamonds = getOrInitDiamondsBalance(uid);
+        if (curDiamonds < requiredDiamonds) {
+          safeSend(ws, {
+            type: 'WALLET_EXCHANGE_RESULT',
+            success: false,
+            error: `Insufficient Diamonds! Need ${requiredDiamonds.toLocaleString('en-US')} Diamonds.`,
+          });
+          safeSend(ws, buildWalletStatePayload(uid, integrity));
+          break;
+        }
+
+        userDiamonds.set(uid, curDiamonds - requiredDiamonds);
         const curBal = getOrInitGreedyBalance(uid);
         const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + exCoins);
         greedyUserBalances.set(uid, newBal);
+
+        recordWalletTx(
+          uid,
+          'DIAMOND_EXCHANGE',
+          'Exchange diamonds to coins',
+          `-${requiredDiamonds.toLocaleString('en-US')} Diamonds`,
+          false
+        );
+        recordWalletTx(
+          uid,
+          'COIN_USAGE',
+          'Exchange from Diamonds',
+          `+${exCoins.toLocaleString('en-US')} Coins`,
+          true
+        );
+
+        safeSend(ws, buildWalletStatePayload(uid, integrity));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        safeSend(ws, {
+          type: 'WALLET_EXCHANGE_RESULT',
+          success: true,
+          coinsAdded: exCoins,
+          diamondsSpent: requiredDiamonds,
+          message: `Exchanged ${requiredDiamonds.toLocaleString('en-US')} Diamonds for +${exCoins.toLocaleString('en-US')} Coins!`,
+        });
         break;
       }
 
       case 'WALLET_ADD_REWARD': {
+        // Blocked by Anti-Cheat: rewards can only be credited by authoritative server events (Level, Rocket, Invite, Check-In).
         const uid = String(meta.userId || msg.userId || '');
-        if (!uid) break;
-        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
-        if (!meta.userId) meta.userId = uid;
-        const amt = Number(msg.amount);
-        if (!Number.isInteger(amt) || amt <= 0 || amt > 15000000) break;
-        const now = Date.now();
-        const prevAt = greedyLastRewardAtMs.get(uid) || 0;
-        if (now - prevAt < 250) break;
-        greedyLastRewardAtMs.set(uid, now);
-        const curBal = getOrInitGreedyBalance(uid);
-        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + amt);
-        greedyUserBalances.set(uid, newBal);
-        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        safeSend(ws, {
+          type: 'WALLET_ACTION_RESULT',
+          action: 'ADD_REWARD',
+          success: false,
+          error: 'Direct client coin minting is blocked by anti-cheat.',
+        });
+        if (uid) {
+          safeSend(ws, buildWalletStatePayload(uid));
+        }
         break;
       }
 
@@ -2170,12 +2917,392 @@ wss.on('connection', (ws) => {
         if (!uid) break;
         if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
         if (!meta.userId) meta.userId = uid;
+
         const amt = Number(msg.amount);
+        const txId = String(msg.txId || '').trim();
+        const title = String(msg.title || 'Purchase').slice(0, 96);
         if (!Number.isInteger(amt) || amt <= 0) break;
+
+        pruneWalletTxCache();
+        if (txId && walletProcessedTxIds.has(txId)) {
+          safeSend(ws, buildWalletStatePayload(uid));
+          safeSend(ws, { type: 'WALLET_SPEND_RESULT', success: true, txId, serverBalance: getOrInitGreedyBalance(uid) });
+          break;
+        }
+
         const curBal = getOrInitGreedyBalance(uid);
-        const newBal = Math.max(0, curBal - amt);
+        if (curBal < amt) {
+          safeSend(ws, {
+            type: 'WALLET_SPEND_RESULT',
+            success: false,
+            txId,
+            error: 'Insufficient Coins balance on server!',
+            serverBalance: curBal,
+          });
+          safeSend(ws, buildWalletStatePayload(uid));
+          break;
+        }
+
+        const newBal = curBal - amt;
         greedyUserBalances.set(uid, newBal);
+        if (txId) {
+          walletProcessedTxIds.set(txId, {
+            userId: uid,
+            amount: amt,
+            remainingGiftCoins: title.toLowerCase().includes('gift') ? amt : 0,
+            createdAtMs: Date.now(),
+          });
+        }
+        recordWalletTx(uid, 'COIN_USAGE', title, `-${amt.toLocaleString('en-US')} Coins`, false, txId || null);
+
+        safeSend(ws, buildWalletStatePayload(uid));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        safeSend(ws, { type: 'WALLET_SPEND_RESULT', success: true, txId, serverBalance: newBal });
+        break;
+      }
+
+      case 'STORE_INIT_SYNC': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (!uid) break;
+        if (!meta.userId) meta.userId = uid;
+        addUserSocket(uid, ws);
+        if (msg.deviceIntegrity) {
+          recordUserDeviceIntegrity(uid, msg.deviceIntegrity);
+        }
+        safeSend(ws, buildStoreStatePayload(uid, msg.deviceIntegrity || null));
+        break;
+      }
+
+      case 'STORE_BUY_ITEM': {
+        const uid = String(meta.userId || msg.userId || '');
+        const integrity = msg.deviceIntegrity || null;
+        if (!uid) break;
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!meta.userId) meta.userId = uid;
+        addUserSocket(uid, ws);
+        if (integrity) recordUserDeviceIntegrity(uid, integrity);
+
+        const check = validateIntegrityForWallet(uid, integrity);
+        if (!check.ok) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: check.error });
+          break;
+        }
+
+        const itemId = String(msg.itemId || '');
+        const durationDays = Number(msg.durationDays);
+        const equipImmediately = Boolean(msg.equipImmediately);
+        const orderId = String(msg.clientOrderId || '').trim();
+        const itemSpec = STORE_CATALOG[itemId];
+        const durationMult = STORE_DURATION_MULT[durationDays];
+        if (!itemSpec || !durationMult) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: 'Invalid store item or duration.' });
+          break;
+        }
+        if (!orderId || orderId.length < 8) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: 'Missing order reference.' });
+          break;
+        }
+
+        const nowMs = Date.now();
+        pruneStoreOrderCache(nowMs);
+        if (storeProcessedOrderIds.has(`sb_${orderId}`)) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: 'Duplicate purchase blocked by anti-cheat.' });
+          safeSend(ws, buildStoreStatePayload(uid, integrity));
+          safeSend(ws, buildWalletStatePayload(uid, integrity));
+          break;
+        }
+
+        const lastAct = storeLastActionAt.get(uid) || 0;
+        if (nowMs - lastAct < STORE_ACTION_COOLDOWN_MS) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: 'Please wait a moment before next purchase.' });
+          break;
+        }
+
+        const price = Math.floor(itemSpec.basePrice7Days * durationMult);
+        const curBal = getOrInitGreedyBalance(uid);
+        if (curBal < price) {
+          safeSend(ws, {
+            type: 'STORE_ACTION_RESULT',
+            action: 'BUY',
+            success: false,
+            insufficientCoins: true,
+            requiredCoins: price,
+            serverBalance: curBal,
+            itemId,
+            durationDays,
+            error: `Insufficient Coins! Need ${price.toLocaleString('en-US')} Coins.`,
+          });
+          safeSend(ws, buildWalletStatePayload(uid, integrity));
+          break;
+        }
+
+        storeProcessedOrderIds.set(`sb_${orderId}`, nowMs);
+        storeLastActionAt.set(uid, nowMs);
+
+        const newBal = curBal - price;
+        greedyUserBalances.set(uid, newBal);
+
+        const inv = pruneAndSyncUserStore(uid, nowMs);
+        const existing = inv.items.get(itemId);
+        const isRenewal = Boolean(existing);
+        const baseStart = existing ? Math.max(Number(existing.expiresAtMs || 0), nowMs) : nowMs;
+        const nextExpiresAt = baseStart + durationDays * STORE_DAY_MS;
+        inv.items.set(itemId, {
+          itemId,
+          category: itemSpec.category,
+          expiresAtMs: nextExpiresAt,
+          totalDaysPurchased: (existing ? Number(existing.totalDaysPurchased || 0) : 0) + durationDays,
+          purchasedAtMs: existing ? existing.purchasedAtMs : nowMs,
+          giftedById: existing?.giftedById || '',
+          giftedByName: existing?.giftedByName || '',
+        });
+
+        if (equipImmediately) {
+          inv.equipped[itemSpec.category] = itemId;
+        }
+        pruneAndSyncUserStore(uid, nowMs);
+
+        const actionLabel = isRenewal ? 'Store Renew' : 'Store Buy';
+        recordWalletTx(
+          uid,
+          'COIN_USAGE',
+          `${actionLabel}: ${itemSpec.name} (+${durationDays} Days)`,
+          `-${price.toLocaleString('en-US')} Coins`,
+          false,
+          `sb_tx_${orderId}`
+        );
+
+        const expGained = Math.max(1, Math.floor(price / 5));
+        grantUserExp(uid, expGained, 'STORE_BUY');
+
+        const activeRoomId = findUserActiveRoomId(uid);
+        if (activeRoomId && rooms.has(activeRoomId)) {
+          broadcastToRoom(rooms.get(activeRoomId), buildRoomSnapshot(rooms.get(activeRoomId)));
+        }
+
+        safeSend(ws, buildWalletStatePayload(uid, integrity));
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        safeSend(ws, buildStoreStatePayload(uid, integrity));
+        safeSend(ws, {
+          type: 'STORE_ACTION_RESULT',
+          action: 'BUY',
+          success: true,
+          itemId,
+          durationDays,
+          totalCost: price,
+          expGained,
+          isRenewal,
+          equippedNow: equipImmediately,
+          serverBalance: newBal,
+          message: isRenewal
+            ? `${itemSpec.name} renewed for +${durationDays} Days!`
+            : `${itemSpec.name} (${durationDays} Days) purchased!`,
+        });
+        break;
+      }
+
+      case 'STORE_GIFT_ITEM': {
+        const uid = String(meta.userId || msg.userId || '');
+        const integrity = msg.deviceIntegrity || null;
+        if (!uid) break;
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!meta.userId) meta.userId = uid;
+        addUserSocket(uid, ws);
+        if (integrity) recordUserDeviceIntegrity(uid, integrity);
+
+        const check = validateIntegrityForWallet(uid, integrity);
+        if (!check.ok) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: check.error });
+          break;
+        }
+
+        const targetUserId = String(msg.targetUserId || '').trim();
+        const targetName = String(msg.targetName || `User ${targetUserId}`).trim().slice(0, 48);
+        const itemId = String(msg.itemId || '');
+        const durationDays = Number(msg.durationDays);
+        const orderId = String(msg.clientOrderId || '').trim();
+        const itemSpec = STORE_CATALOG[itemId];
+        const durationMult = STORE_DURATION_MULT[durationDays];
+
+        if (!/^\d{6,10}$/.test(targetUserId)) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'Enter a valid numeric Friend ID.' });
+          break;
+        }
+        if (targetUserId === uid) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'You cannot send a Store gift to yourself. Use Buy instead.' });
+          break;
+        }
+        if (!itemSpec || !durationMult) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'Invalid store item or duration.' });
+          break;
+        }
+        if (!orderId || orderId.length < 8) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'Missing order reference.' });
+          break;
+        }
+
+        const nowMs = Date.now();
+        pruneStoreOrderCache(nowMs);
+        if (storeProcessedOrderIds.has(`sg_${orderId}`)) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'Duplicate gift blocked by anti-cheat.' });
+          safeSend(ws, buildWalletStatePayload(uid, integrity));
+          break;
+        }
+
+        const lastAct = storeLastActionAt.get(uid) || 0;
+        if (nowMs - lastAct < STORE_ACTION_COOLDOWN_MS) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'Please wait a moment before next gift.' });
+          break;
+        }
+
+        const price = Math.floor(itemSpec.basePrice7Days * durationMult);
+        const curBal = getOrInitGreedyBalance(uid);
+        if (curBal < price) {
+          safeSend(ws, {
+            type: 'STORE_ACTION_RESULT',
+            action: 'GIFT',
+            success: false,
+            insufficientCoins: true,
+            requiredCoins: price,
+            serverBalance: curBal,
+            itemId,
+            durationDays,
+            error: `Insufficient Coins! Need ${price.toLocaleString('en-US')} Coins.`,
+          });
+          safeSend(ws, buildWalletStatePayload(uid, integrity));
+          break;
+        }
+
+        storeProcessedOrderIds.set(`sg_${orderId}`, nowMs);
+        storeLastActionAt.set(uid, nowMs);
+
+        const newBal = curBal - price;
+        greedyUserBalances.set(uid, newBal);
+
+        const senderName = users.get(uid)?.nickname || `User ${uid}`;
+        const recipientInv = pruneAndSyncUserStore(targetUserId, nowMs);
+        const existingTarget = recipientInv.items.get(itemId);
+        const baseStart = existingTarget ? Math.max(Number(existingTarget.expiresAtMs || 0), nowMs) : nowMs;
+        recipientInv.items.set(itemId, {
+          itemId,
+          category: itemSpec.category,
+          expiresAtMs: baseStart + durationDays * STORE_DAY_MS,
+          totalDaysPurchased: (existingTarget ? Number(existingTarget.totalDaysPurchased || 0) : 0) + durationDays,
+          purchasedAtMs: existingTarget ? existingTarget.purchasedAtMs : nowMs,
+          giftedById: uid,
+          giftedByName: senderName,
+        });
+        pruneAndSyncUserStore(targetUserId, nowMs);
+
+        const recipientProf = users.get(targetUserId);
+        const resolvedRecipientName = recipientProf?.nickname || targetName;
+
+        recordWalletTx(
+          uid,
+          'COIN_USAGE',
+          `Store Gift to ${resolvedRecipientName} (${targetUserId}): ${itemSpec.name} (${durationDays} Days)`,
+          `-${price.toLocaleString('en-US')} Coins`,
+          false,
+          `sg_tx_${orderId}`
+        );
+
+        const expGained = Math.max(1, Math.floor(price / 5));
+        grantUserExp(uid, expGained, 'STORE_GIFT');
+
+        // Push real-time Store & My Items update to the recipient if online
+        pushStoreSyncToUser(targetUserId);
+        sendToUser(targetUserId, {
+          type: 'STORE_GIFT_RECEIVED',
+          itemId,
+          itemName: itemSpec.name,
+          durationDays,
+          fromUserId: uid,
+          fromName: senderName,
+          message: `🎁 ${senderName} gifted you ${itemSpec.name} (${durationDays} Days) in My Items!`,
+        });
+
+        safeSend(ws, buildWalletStatePayload(uid, integrity));
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        safeSend(ws, buildStoreStatePayload(uid, integrity));
+        safeSend(ws, {
+          type: 'STORE_ACTION_RESULT',
+          action: 'GIFT',
+          success: true,
+          itemId,
+          durationDays,
+          totalCost: price,
+          expGained,
+          recipientId: targetUserId,
+          recipientName: `${resolvedRecipientName} (ID: ${targetUserId})`,
+          serverBalance: newBal,
+          message: `Sent ${itemSpec.name} (${durationDays} Days) to ${resolvedRecipientName}!`,
+        });
+        break;
+      }
+
+      case 'STORE_EQUIP_ITEM': {
+        const uid = String(meta.userId || msg.userId || '');
+        const integrity = msg.deviceIntegrity || null;
+        if (!uid) break;
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!meta.userId) meta.userId = uid;
+        addUserSocket(uid, ws);
+        if (integrity) recordUserDeviceIntegrity(uid, integrity);
+
+        const check = validateIntegrityForWallet(uid, integrity);
+        if (!check.ok) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'EQUIP', success: false, error: check.error });
+          break;
+        }
+
+        const itemId = String(msg.itemId || '');
+        const equip = Boolean(msg.equip);
+        const itemSpec = STORE_CATALOG[itemId];
+        if (!itemSpec) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'EQUIP', success: false, error: 'Unknown store item.' });
+          break;
+        }
+
+        const nowMs = Date.now();
+        const inv = pruneAndSyncUserStore(uid, nowMs);
+        if (equip) {
+          const owned = inv.items.get(itemId);
+          if (!owned || Number(owned.expiresAtMs || 0) <= nowMs) {
+            safeSend(ws, {
+              type: 'STORE_ACTION_RESULT',
+              action: 'EQUIP',
+              success: false,
+              itemId,
+              error: 'Item not owned or expired! Buy or renew it in Store first.',
+            });
+            safeSend(ws, buildStoreStatePayload(uid, integrity));
+            break;
+          }
+          inv.equipped[itemSpec.category] = itemId;
+        } else {
+          if (inv.equipped[itemSpec.category] === itemId) {
+            inv.equipped[itemSpec.category] = null;
+          }
+        }
+        pruneAndSyncUserStore(uid, nowMs);
+
+        const activeRoomId = findUserActiveRoomId(uid);
+        if (activeRoomId && rooms.has(activeRoomId)) {
+          broadcastToRoom(rooms.get(activeRoomId), buildRoomSnapshot(rooms.get(activeRoomId)));
+        }
+
+        safeSend(ws, buildStoreStatePayload(uid, integrity));
+        safeSend(ws, {
+          type: 'STORE_ACTION_RESULT',
+          action: 'EQUIP',
+          success: true,
+          itemId,
+          category: itemSpec.category,
+          equipped: inv.equipped[itemSpec.category] === itemId,
+          message: inv.equipped[itemSpec.category] === itemId
+            ? `${itemSpec.name} equipped!`
+            : `${itemSpec.name} unequipped`,
+        });
         break;
       }
 
@@ -2187,7 +3314,7 @@ wss.on('connection', (ws) => {
         const { nowMs, roundNumber, elapsedMs } = getGreedyCurrentRoundInfo();
         pruneOldGreedyRounds(roundNumber);
 
-        const serverBalance = uid ? getOrInitGreedyBalance(uid, msg.clientBalanceHint) : GREEDY_INITIAL_COINS;
+        const serverBalance = uid ? getOrInitGreedyBalance(uid) : GREEDY_INITIAL_COINS;
         const roundBettors = greedyRoundBets.get(roundNumber);
         const myEntry = uid && roundBettors ? roundBettors.get(uid) : null;
         const userSlotBets = myEntry ? myEntry.slotBets : {};
@@ -2235,7 +3362,7 @@ wss.on('connection', (ws) => {
         if (!meta.userId) meta.userId = uid;
 
         const { nowMs, roundNumber: curRound, elapsedMs } = getGreedyCurrentRoundInfo();
-        const curBal = getOrInitGreedyBalance(uid, msg.clientBalanceHint);
+        const curBal = getOrInitGreedyBalance(uid);
 
         // Strict round & timing check: reject any bet once Betting Window locks at 29.5s!
         const reqRound = Number(msg.roundNumber);
@@ -2404,6 +3531,257 @@ wss.on('connection', (ws) => {
           break;
         }
         safeSend(ws, buildGreedyPerUserOutcomePayload('GREEDY_SETTLEMENT', reqRound, uid, msg.clientSentElapsedMs));
+        break;
+      }
+
+      case 'INVITE_SYNC': {
+        const uid = String(msg.userId || meta.userId || '');
+        if (!uid) break;
+        if (!meta.userId) meta.userId = uid;
+        addUserSocket(uid, ws);
+        if (msg.deviceIntegrity) {
+          recordUserDeviceIntegrity(uid, msg.deviceIntegrity);
+        }
+        evaluateInviteDay3Retention(uid, msg.deviceIntegrity || null);
+        safeSend(ws, buildInviteStatePayload(uid, msg.deviceIntegrity || null));
+        break;
+      }
+
+      case 'INVITE_LOOKUP': {
+        const uid = String(msg.userId || meta.userId || '');
+        const code = String(msg.code || '').trim();
+        if (!/^\d{8}$/.test(code)) {
+          safeSend(ws, {
+            type: 'INVITE_LOOKUP_RESULT',
+            code,
+            found: false,
+            error: 'Please enter a valid 8-digit invitation ID.',
+          });
+          break;
+        }
+        if (uid && code === uid) {
+          safeSend(ws, {
+            type: 'INVITE_LOOKUP_RESULT',
+            code,
+            found: false,
+            error: 'You cannot bind your own invitation code.',
+          });
+          break;
+        }
+        const inviterUser = users.get(code);
+        const inviterRoom = rooms.get(code);
+        if (!inviterUser && !inviterRoom) {
+          safeSend(ws, {
+            type: 'INVITE_LOOKUP_RESULT',
+            code,
+            found: false,
+            error: 'User ID not found. Ask your friend to open JustFun online first.',
+          });
+          break;
+        }
+        const targetLedger = getOrCreateInviteLedger(code);
+        if (uid && targetLedger && targetLedger.boundInviterId === uid) {
+          safeSend(ws, {
+            type: 'INVITE_LOOKUP_RESULT',
+            code,
+            found: false,
+            error: 'Mutual invite loops are blocked by anti-cheat.',
+          });
+          break;
+        }
+        const inviterLevel = Number(userLevels.get(code)?.level ?? inviterUser?.level ?? 0);
+        safeSend(ws, {
+          type: 'INVITE_LOOKUP_RESULT',
+          code,
+          found: true,
+          inviter: {
+            userId: code,
+            nickname: inviterUser?.nickname || inviterRoom?.hostName || `User ${code}`,
+            avatarUri: inviterUser?.avatarUri || inviterRoom?.hostAvatarUri || '',
+            level: inviterLevel,
+          },
+        });
+        break;
+      }
+
+      case 'INVITE_BIND_CODE': {
+        const uid = String(msg.userId || meta.userId || '');
+        const code = String(msg.code || '').trim();
+        const integrity = msg.deviceIntegrity || null;
+        if (!uid) break;
+        if (!meta.userId) meta.userId = uid;
+        addUserSocket(uid, ws);
+
+        // Rate limit bind attempts (max 6 per 60s)
+        const now = Date.now();
+        const attempts = (inviteBindRateLimits.get(uid) || []).filter((t) => now - t < 60000);
+        if (attempts.length >= 6) {
+          safeSend(ws, {
+            type: 'INVITE_BIND_RESULT',
+            success: false,
+            error: 'Too many attempts. Please wait a minute before trying again.',
+          });
+          break;
+        }
+        attempts.push(now);
+        inviteBindRateLimits.set(uid, attempts);
+
+        // 1. Validate format, self-invite & account existence
+        if (!/^\d{8}$/.test(code)) {
+          safeSend(ws, { type: 'INVITE_BIND_RESULT', success: false, error: 'Invalid 8-digit invitation ID.' });
+          break;
+        }
+        if (code === uid) {
+          safeSend(ws, { type: 'INVITE_BIND_RESULT', success: false, error: 'Self-invitation is blocked by anti-cheat!' });
+          break;
+        }
+        const inviterUser = users.get(code);
+        const inviterRoom = rooms.get(code);
+        if (!inviterUser && !inviterRoom) {
+          safeSend(ws, { type: 'INVITE_BIND_RESULT', success: false, error: 'Inviter account does not exist.' });
+          break;
+        }
+
+        // 2. Non-Clone, Non-Emulator & Hardware Fingerprint Check
+        const intCheck = validateIntegrityForInvite(integrity);
+        if (!intCheck.ok) {
+          safeSend(ws, { type: 'INVITE_BIND_RESULT', success: false, error: intCheck.error });
+          break;
+        }
+        recordUserDeviceIntegrity(uid, integrity);
+
+        // 3. Account-level already bound check
+        const myLedger = getOrCreateInviteLedger(uid);
+        if (myLedger.boundInviterId) {
+          safeSend(ws, {
+            type: 'INVITE_BIND_RESULT',
+            success: false,
+            error: `Already bound to ID ${myLedger.boundInviterId}. Only one bind allowed.`,
+          });
+          break;
+        }
+
+        // 4. Mutual invite loop check
+        const inviterLedger = getOrCreateInviteLedger(code);
+        if (inviterLedger.boundInviterId === uid) {
+          safeSend(ws, {
+            type: 'INVITE_BIND_RESULT',
+            success: false,
+            error: 'Mutual invite loops are blocked by anti-cheat.',
+          });
+          break;
+        }
+
+        // 5. Same-device & 1-device-lifetime-claim anti-fraud lock
+        if (isDeviceAlreadyClaimedForKeys(intCheck.keys)) {
+          safeSend(ws, {
+            type: 'INVITE_BIND_RESULT',
+            success: false,
+            error: 'This physical device has already claimed an invitation reward!',
+          });
+          break;
+        }
+        if (shareSameDevice(uid, code, intCheck.keys)) {
+          safeSend(ws, {
+            type: 'INVITE_BIND_RESULT',
+            success: false,
+            error: 'Inviter and friend share the same device. Blocked by anti-cheat!',
+          });
+          break;
+        }
+
+        // All Anti-Cheat & Non-Clone Checks Passed!
+        intCheck.keys.forEach((k) => {
+          deviceInviteClaims.set(k, { firstUserId: uid, boundInviterId: code, boundAtMs: now });
+        });
+
+        myLedger.boundInviterId = code;
+        myLedger.boundAtMs = now;
+
+        const friendProfile = users.get(uid) || {};
+        const joinDate = new Date(now).toISOString().slice(0, 10);
+        inviterLedger.invitedFriends.set(uid, {
+          userId: uid,
+          nickname: friendProfile.nickname || `User ${uid}`,
+          avatarUri: friendProfile.avatarUri || '',
+          day1Credited: true,
+          day3Credited: false,
+          hasRecharged: false,
+          rechargeCoins: 0,
+          hasSentGifts: false,
+          giftCoinsReward: 0,
+          coinsRewarded: INVITE_DAY1_COINS,
+          joinDate,
+          boundAtMs: now,
+        });
+        inviterLedger.withdrawableCoins += INVITE_DAY1_COINS;
+        inviterLedger.totalCoinsRewarded += INVITE_DAY1_COINS;
+
+        // Credit Friend's Wallet (+250,000 Coins welcome reward)
+        const curBal = getOrInitGreedyBalance(uid);
+        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + INVITE_FRIEND_WELCOME_COINS);
+        greedyUserBalances.set(uid, newBal);
+        recordWalletTx(uid, 'COIN_USAGE', 'Invite Friend Welcome Bonus', `+${INVITE_FRIEND_WELCOME_COINS.toLocaleString('en-US')} Coins`, true);
+        safeSend(ws, buildWalletStatePayload(uid, integrity));
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+
+        const inviterName = inviterUser?.nickname || inviterRoom?.hostName || `User ${code}`;
+        pushInviteTicker(inviterName, INVITE_DAY1_COINS, 'FRIEND_JOIN');
+
+        safeSend(ws, {
+          type: 'INVITE_BIND_RESULT',
+          success: true,
+          boundInviterId: code,
+          boundInviterName: inviterName,
+          welcomeCoins: INVITE_FRIEND_WELCOME_COINS,
+          message: `Verified & bound to ${inviterName}! +250,000 Coins credited to your Wallet.`,
+        });
+        safeSend(ws, buildInviteStatePayload(uid, integrity));
+        pushInviteSyncToUser(code);
+        break;
+      }
+
+      case 'INVITE_WITHDRAW': {
+        const uid = String(msg.userId || meta.userId || '');
+        const integrity = msg.deviceIntegrity || null;
+        if (!uid) break;
+        if (!meta.userId) meta.userId = uid;
+
+        if (integrity && integrity.isClonedEnvironment) {
+          safeSend(ws, {
+            type: 'INVITE_WITHDRAW_RESULT',
+            success: false,
+            error: 'Clone / Dual-App detected. Withdrawals are disabled in cloned environments.',
+          });
+          break;
+        }
+
+        const ledger = getOrCreateInviteLedger(uid);
+        const amount = Math.max(0, Math.floor(ledger.withdrawableCoins));
+        if (amount <= 0) {
+          safeSend(ws, {
+            type: 'INVITE_WITHDRAW_RESULT',
+            success: false,
+            error: 'No withdrawable invitation coins available yet.',
+          });
+          break;
+        }
+
+        ledger.withdrawableCoins = 0;
+        const curBal = getOrInitGreedyBalance(uid);
+        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + amount);
+        greedyUserBalances.set(uid, newBal);
+        recordWalletTx(uid, 'COIN_USAGE', 'Invite Friends Reward', `+${amount.toLocaleString('en-US')} Coins`, true);
+
+        safeSend(ws, buildWalletStatePayload(uid, integrity));
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        safeSend(ws, {
+          type: 'INVITE_WITHDRAW_RESULT',
+          success: true,
+          withdrawnAmount: amount,
+          serverBalance: newBal,
+        });
+        safeSend(ws, buildInviteStatePayload(uid, integrity));
         break;
       }
     }
