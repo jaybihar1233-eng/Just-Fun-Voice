@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 8080;
@@ -48,15 +49,24 @@ const userDmPrivacy = new Map();
 const reports = [];
 
 // ============================================================================
-// ZERO-LOAD GLOBAL GREEDY BABY ENGINE (SYNCED ACROSS ALL CHAT ROOMS)
+// ZERO-LOAD ANTI-CHEAT GREEDY BABY ENGINE (SYNCED ACROSS ALL CHAT ROOMS)
 // ============================================================================
 const GREEDY_EPOCH_MS = 1730000000000;
 const GREEDY_ROUND_MS = 40000;
+const GREEDY_BET_CUTOFF_MS = 29500;
 const GREEDY_SLOT_MULTIPLIERS = [5, 5, 5, 5, 10, 15, 25, 45];
+const GREEDY_ALLOWED_CHIPS = new Set([100, 1000, 10000, 50000, 100000, 200000, 500000, 1000000, 5000000]);
+const GREEDY_INITIAL_COINS = 2500000;
+const GREEDY_MAX_BETS_PER_ROUND = 40;
+const GREEDY_HMAC_SECRET = process.env.GREEDY_HMAC_SECRET || crypto.randomBytes(32).toString('hex');
+
 const greedySubscribers = new Set(); // Only sockets actively viewing Greedy Baby
 const greedyRoundBets = new Map();   // Map<roundNumber, Map<userId, { userId, nickname, avatarUri, slotBets, updatedAt }>>
-const greedyRecentChips = new Map(); // Map<roundNumber, Array<{ slotId, chipIndex, isUserId }>>
-const greedySettlements = new Map(); // Map<roundNumber, SettlementPayload>
+const greedyRecentChips = new Map(); // Map<roundNumber, Array<{ slotId, chipIndex, userId }>>
+const greedySettlements = new Map(); // Map<roundNumber, CachedSettlement>
+const greedyUserBalances = new Map(); // Map<userId, number> (Server-authoritative coins)
+const greedyRoundBetCounts = new Map(); // Map<roundNumber, Map<userId, number>>
+const greedyLastBetAtMs = new Map(); // Map<userId, number>
 let greedyDayIndex = Math.floor(Date.now() / 86400000);
 let greedyTodayLeaderboard = new Map(); // Map<userId, { userId, userName, avatarUri, winCoins }>
 let greedyYesterdayLeaderboard = new Map();
@@ -74,6 +84,24 @@ function ensureGreedyDayFresh() {
   }
 }
 
+function getOrInitGreedyBalance(userId, clientBalanceHint = null) {
+  if (!userId) return GREEDY_INITIAL_COINS;
+  const parsedHint = Number(clientBalanceHint);
+  const hasValidHint = Number.isFinite(parsedHint) && parsedHint >= 0 && parsedHint <= GREEDY_INITIAL_COINS;
+  if (!greedyUserBalances.has(userId)) {
+    const startBal = hasValidHint ? Math.floor(parsedHint) : GREEDY_INITIAL_COINS;
+    greedyUserBalances.set(userId, startBal);
+    return startBal;
+  }
+  const curBal = greedyUserBalances.get(userId);
+  // Only allow client hint to adjust DOWNWARD (e.g. Store/Gift spends), NEVER upward (anti-cheat)
+  if (hasValidHint && Math.floor(parsedHint) < curBal) {
+    greedyUserBalances.set(userId, Math.floor(parsedHint));
+    return Math.floor(parsedHint);
+  }
+  return curBal;
+}
+
 function getGreedyCurrentRoundInfo(nowMs = Date.now()) {
   const safeDiff = Math.max(0, nowMs - GREEDY_EPOCH_MS);
   const roundNumber = Math.floor(safeDiff / GREEDY_ROUND_MS);
@@ -82,11 +110,11 @@ function getGreedyCurrentRoundInfo(nowMs = Date.now()) {
 }
 
 function getGreedyWinningOutcomeForRound(roundNumber) {
-  let s = ((Math.abs(Math.floor(roundNumber)) + 1234567) % 2147483647) || 1;
-  s = (s * 48271) % 2147483647;
-  s = (s * 48271) % 2147483647;
-  s = (s * 48271) % 2147483647;
-  const r = s % 100;
+  const hmac = crypto
+    .createHmac('sha256', GREEDY_HMAC_SECRET)
+    .update(`greedy_v2:${Math.floor(roundNumber)}`)
+    .digest();
+  const r = hmac.readUInt32BE(0) % 100;
   if (r < 17) return 0;
   if (r < 34) return 1;
   if (r < 51) return 2;
@@ -99,6 +127,17 @@ function getGreedyWinningOutcomeForRound(roundNumber) {
   return 9;             // Pizza Platter (4,5,6,7)
 }
 
+function getGreedyResultHistory(latestCompletedRound) {
+  const arr = [];
+  for (let i = 0; i < 8; i++) {
+    const r = latestCompletedRound - i;
+    if (r >= 0) {
+      arr.push(getGreedyWinningOutcomeForRound(r));
+    }
+  }
+  return arr;
+}
+
 function getGreedyWinningSlots(outcomeId) {
   if (outcomeId === 8) return [0, 1, 2, 3];
   if (outcomeId === 9) return [4, 5, 6, 7];
@@ -109,6 +148,9 @@ function getGreedyWinningSlots(outcomeId) {
 function pruneOldGreedyRounds(currentRound) {
   for (const r of greedyRoundBets.keys()) {
     if (r < currentRound - 2) greedyRoundBets.delete(r);
+  }
+  for (const r of greedyRoundBetCounts.keys()) {
+    if (r < currentRound - 2) greedyRoundBetCounts.delete(r);
   }
   for (const r of greedyRecentChips.keys()) {
     if (r < currentRound - 1) greedyRecentChips.delete(r);
@@ -153,9 +195,17 @@ function computeAndCacheGreedySettlement(roundNumber) {
   const winningSlots = getGreedyWinningSlots(winningFoodId);
   const bettors = greedyRoundBets.get(roundNumber);
   const allWinners = [];
+  const userWinAmountsById = {};
+  const userBetTotalsById = {};
 
   if (bettors) {
     for (const b of bettors.values()) {
+      let betTotal = 0;
+      for (let s = 0; s < 8; s++) {
+        betTotal += Number(b.slotBets[s] || 0);
+      }
+      userBetTotalsById[b.userId] = betTotal;
+
       let winAmount = 0;
       for (const sId of winningSlots) {
         const betAmt = Number(b.slotBets[sId] || 0);
@@ -163,7 +213,12 @@ function computeAndCacheGreedySettlement(roundNumber) {
           winAmount += betAmt * (GREEDY_SLOT_MULTIPLIERS[sId] || 5);
         }
       }
+      userWinAmountsById[b.userId] = winAmount;
+
       if (winAmount > 0) {
+        const prevBal = getOrInitGreedyBalance(b.userId);
+        greedyUserBalances.set(b.userId, prevBal + winAmount);
+
         const userProf = users.get(b.userId) || {};
         const name = b.nickname || userProf.nickname || `User ${b.userId}`;
         const avatar = b.avatarUri || userProf.avatarUri || '';
@@ -193,17 +248,36 @@ function computeAndCacheGreedySettlement(roundNumber) {
     winAmount: w.winAmount,
   }));
 
-  const payload = {
-    type: 'GREEDY_SETTLEMENT',
+  const cached = {
     roundNumber,
     winningFoodId,
     topWinners,
+    userWinAmountsById,
+    userBetTotalsById,
     todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard),
     yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard),
-    serverNowMs: Date.now(),
+    completedHistory: getGreedyResultHistory(roundNumber),
   };
-  greedySettlements.set(roundNumber, payload);
-  return payload;
+  greedySettlements.set(roundNumber, cached);
+  return cached;
+}
+
+function buildGreedyPerUserOutcomePayload(type, roundNumber, userId, clientSentElapsedMs = 0) {
+  const cached = computeAndCacheGreedySettlement(roundNumber);
+  return {
+    type,
+    roundNumber: cached.roundNumber,
+    winningFoodId: cached.winningFoodId,
+    topWinners: cached.topWinners,
+    userBetTotal: Number(cached.userBetTotalsById[userId] || 0),
+    userWinAmount: Number(cached.userWinAmountsById[userId] || 0),
+    serverBalance: userId ? getOrInitGreedyBalance(userId) : GREEDY_INITIAL_COINS,
+    todayRankList: cached.todayRankList,
+    yesterdayRankList: cached.yesterdayRankList,
+    completedHistory: cached.completedHistory,
+    serverNowMs: Date.now(),
+    clientSentElapsedMs: Number(clientSentElapsedMs || 0),
+  };
 }
 
 function broadcastToGreedySubscribers(payloadObj, excludeWs = null) {
@@ -919,7 +993,11 @@ wss.on('connection', (ws) => {
 
     switch (msg.type) {
       case 'PING': {
-        safeSend(ws, { type: 'PONG', ts: Date.now() });
+        safeSend(ws, {
+          type: 'PONG',
+          ts: Date.now(),
+          clientSentElapsedMs: Number(msg.clientSentElapsedMs || 0),
+        });
         break;
       }
 
@@ -1684,23 +1762,37 @@ wss.on('connection', (ws) => {
       case 'GREEDY_OPEN': {
         greedySubscribers.add(ws);
         ensureGreedyDayFresh();
-        const uid = String(msg.userId || meta.userId || '');
+        const uid = String(meta.userId || msg.userId || '');
+        if (uid && !meta.userId) meta.userId = uid;
         const { nowMs, roundNumber, elapsedMs } = getGreedyCurrentRoundInfo();
         pruneOldGreedyRounds(roundNumber);
 
+        const serverBalance = uid ? getOrInitGreedyBalance(uid, msg.clientBalanceHint) : GREEDY_INITIAL_COINS;
         const roundBettors = greedyRoundBets.get(roundNumber);
         const myEntry = uid && roundBettors ? roundBettors.get(uid) : null;
         const userSlotBets = myEntry ? myEntry.slotBets : {};
-        const settlement = elapsedMs >= 35000 ? computeAndCacheGreedySettlement(roundNumber) : null;
+
+        // Never leak the current round's outcome before DRAWING starts (elapsedMs >= 30000)!
+        const latestCompletedForHistory = elapsedMs >= 35000 ? roundNumber : roundNumber - 1;
+        const drawReveal = elapsedMs >= 30000
+          ? buildGreedyPerUserOutcomePayload('GREEDY_DRAW_REVEAL', roundNumber, uid, msg.clientSentElapsedMs)
+          : null;
+        const settlement = elapsedMs >= 35000
+          ? buildGreedyPerUserOutcomePayload('GREEDY_SETTLEMENT', roundNumber, uid, msg.clientSentElapsedMs)
+          : null;
 
         safeSend(ws, {
           type: 'GREEDY_STATE_SYNC',
           serverNowMs: nowMs,
+          clientSentElapsedMs: Number(msg.clientSentElapsedMs || 0),
           roundNumber,
           elapsedMs,
+          serverBalance,
           slotTotals: computeGreedySlotTotals(roundNumber),
           userSlotBets,
           recentChips: (greedyRecentChips.get(roundNumber) || []).slice(-32),
+          resultHistory: getGreedyResultHistory(latestCompletedForHistory),
+          drawReveal,
           settlement,
           todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard),
           yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard),
@@ -1714,21 +1806,107 @@ wss.on('connection', (ws) => {
       }
 
       case 'GREEDY_PLACE_BET': {
-        const uid = String(msg.userId || meta.userId || '');
+        const uid = String(meta.userId || msg.userId || '');
         if (!uid) break;
-        const { nowMs, roundNumber: curRound, elapsedMs } = getGreedyCurrentRoundInfo();
-        const reqRound = Number(msg.roundNumber || curRound);
-        // Allow bets during BET_TIME (or within 1.5s latency grace at transition)
-        if (Math.abs(reqRound - curRound) > 1 || (reqRound === curRound && elapsedMs > 31500)) {
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) {
+          safeSend(ws, { type: 'GREEDY_BET_REJECTED', reason: 'Invalid user session' });
           break;
         }
-        const targetRound = curRound;
-        pruneOldGreedyRounds(targetRound);
+        if (!meta.userId) meta.userId = uid;
 
-        let roundBettors = greedyRoundBets.get(targetRound);
+        const { nowMs, roundNumber: curRound, elapsedMs } = getGreedyCurrentRoundInfo();
+        const curBal = getOrInitGreedyBalance(uid, msg.clientBalanceHint);
+
+        // Strict round & timing check: reject any bet once Betting Window locks at 29.5s!
+        const reqRound = Number(msg.roundNumber);
+        if (!Number.isFinite(reqRound) || reqRound !== curRound || elapsedMs >= GREEDY_BET_CUTOFF_MS) {
+          safeSend(ws, {
+            type: 'GREEDY_BET_REJECTED',
+            reason: 'Betting closed for this round!',
+            roundNumber: curRound,
+            serverBalance: curBal,
+            serverNowMs: nowMs,
+          });
+          break;
+        }
+
+        // Anti-spam rate limiting
+        const prevBetAt = greedyLastBetAtMs.get(uid) || 0;
+        if (nowMs - prevBetAt < 40) {
+          safeSend(ws, {
+            type: 'GREEDY_BET_REJECTED',
+            reason: 'Too many bets! Slow down.',
+            roundNumber: curRound,
+            serverBalance: curBal,
+            serverNowMs: nowMs,
+          });
+          break;
+        }
+        let roundCounts = greedyRoundBetCounts.get(curRound);
+        if (!roundCounts) {
+          roundCounts = new Map();
+          greedyRoundBetCounts.set(curRound, roundCounts);
+        }
+        const curCount = roundCounts.get(uid) || 0;
+        if (curCount >= GREEDY_MAX_BETS_PER_ROUND) {
+          safeSend(ws, {
+            type: 'GREEDY_BET_REJECTED',
+            reason: 'Max bets per round reached!',
+            roundNumber: curRound,
+            serverBalance: curBal,
+            serverNowMs: nowMs,
+          });
+          break;
+        }
+
+        // Validate every slot and chip denomination strictly
+        const incomingBets = msg.betsBySlot || {};
+        const entries = Object.entries(incomingBets);
+        if (entries.length === 0 || entries.length > 4) {
+          safeSend(ws, { type: 'GREEDY_BET_REJECTED', reason: 'Invalid bet slots', serverBalance: curBal });
+          break;
+        }
+
+        const validBets = [];
+        let totalCost = 0;
+        let isInvalid = false;
+        for (const [sKey, sAmtRaw] of entries) {
+          const sId = Number(sKey);
+          const sAmt = Number(sAmtRaw);
+          if (!Number.isInteger(sId) || sId < 0 || sId > 7 || !Number.isInteger(sAmt) || !GREEDY_ALLOWED_CHIPS.has(sAmt)) {
+            isInvalid = true;
+            break;
+          }
+          validBets.push([sId, sAmt]);
+          totalCost += sAmt;
+        }
+        if (isInvalid || validBets.length === 0 || totalCost <= 0 || totalCost > 20000000) {
+          safeSend(ws, { type: 'GREEDY_BET_REJECTED', reason: 'Invalid wager amount', serverBalance: curBal });
+          break;
+        }
+
+        if (curBal < totalCost) {
+          safeSend(ws, {
+            type: 'GREEDY_BET_REJECTED',
+            reason: 'Insufficient Gold Coins!',
+            roundNumber: curRound,
+            serverBalance: curBal,
+            serverNowMs: nowMs,
+          });
+          break;
+        }
+
+        // Atomic balance deduction & record
+        const newBal = curBal - totalCost;
+        greedyUserBalances.set(uid, newBal);
+        greedyLastBetAtMs.set(uid, nowMs);
+        roundCounts.set(uid, curCount + 1);
+        pruneOldGreedyRounds(curRound);
+
+        let roundBettors = greedyRoundBets.get(curRound);
         if (!roundBettors) {
           roundBettors = new Map();
-          greedyRoundBets.set(targetRound, roundBettors);
+          greedyRoundBets.set(curRound, roundBettors);
         }
         const userProf = users.get(uid) || {};
         const existing = roundBettors.get(uid) || {
@@ -1738,27 +1916,21 @@ wss.on('connection', (ws) => {
           slotBets: {},
           updatedAt: nowMs,
         };
-        if (msg.nickname) existing.nickname = String(msg.nickname);
+        if (msg.nickname) existing.nickname = String(msg.nickname).slice(0, 32);
         if (msg.avatarUri) existing.avatarUri = String(msg.avatarUri);
         existing.updatedAt = nowMs;
 
-        const incomingBets = msg.betsBySlot || {};
         const betSlots = [];
-        for (const [sKey, sAmtRaw] of Object.entries(incomingBets)) {
-          const sId = Number(sKey);
-          const sAmt = Number(sAmtRaw || 0);
-          if (sId >= 0 && sId <= 7 && sAmt > 0) {
-            existing.slotBets[sId] = Number(existing.slotBets[sId] || 0) + sAmt;
-            betSlots.push(sId);
-          }
+        for (const [sId, sAmt] of validBets) {
+          existing.slotBets[sId] = Number(existing.slotBets[sId] || 0) + sAmt;
+          betSlots.push(sId);
         }
-        if (betSlots.length === 0) break;
         roundBettors.set(uid, existing);
 
-        let chipHist = greedyRecentChips.get(targetRound);
+        let chipHist = greedyRecentChips.get(curRound);
         if (!chipHist) {
           chipHist = [];
-          greedyRecentChips.set(targetRound, chipHist);
+          greedyRecentChips.set(curRound, chipHist);
         }
         const chipIdx = Math.max(0, Math.min(8, Number(msg.chipIndex || 1)));
         betSlots.forEach((sId) => {
@@ -1768,11 +1940,20 @@ wss.on('connection', (ws) => {
           chipHist.splice(0, chipHist.length - 48);
         }
 
-        const slotTotals = computeGreedySlotTotals(targetRound);
+        const slotTotals = computeGreedySlotTotals(curRound);
+        safeSend(ws, {
+          type: 'GREEDY_BET_ACK',
+          roundNumber: curRound,
+          userSlotBets: existing.slotBets,
+          slotTotals,
+          serverBalance: newBal,
+          serverNowMs: nowMs,
+        });
+
         broadcastToGreedySubscribers({
           type: 'GREEDY_BET_EVENT',
           serverNowMs: nowMs,
-          roundNumber: targetRound,
+          roundNumber: curRound,
           userId: uid,
           slotIds: betSlots,
           chipIndex: chipIdx,
@@ -1781,20 +1962,28 @@ wss.on('connection', (ws) => {
         break;
       }
 
-      case 'GREEDY_GET_SETTLEMENT': {
+      case 'GREEDY_GET_DRAW': {
+        const uid = String(meta.userId || msg.userId || '');
         const reqRound = Number(msg.roundNumber);
         if (!Number.isFinite(reqRound)) break;
         const { roundNumber: curRound, elapsedMs } = getGreedyCurrentRoundInfo();
-        if (reqRound > curRound || (reqRound === curRound && elapsedMs < 34500)) {
+        // Anti-cheat: strictly refuse to reveal draw outcome before 30.0s (after betting is closed)!
+        if (reqRound > curRound || (reqRound === curRound && elapsedMs < 30000) || reqRound < curRound - 2) {
           break;
         }
-        const alreadyCached = greedySettlements.has(reqRound);
-        const settlementPayload = computeAndCacheGreedySettlement(reqRound);
-        if (!alreadyCached) {
-          broadcastToGreedySubscribers(settlementPayload);
-        } else {
-          safeSend(ws, settlementPayload);
+        safeSend(ws, buildGreedyPerUserOutcomePayload('GREEDY_DRAW_REVEAL', reqRound, uid, msg.clientSentElapsedMs));
+        break;
+      }
+
+      case 'GREEDY_GET_SETTLEMENT': {
+        const uid = String(meta.userId || msg.userId || '');
+        const reqRound = Number(msg.roundNumber);
+        if (!Number.isFinite(reqRound)) break;
+        const { roundNumber: curRound, elapsedMs } = getGreedyCurrentRoundInfo();
+        if (reqRound > curRound || (reqRound === curRound && elapsedMs < 35000) || reqRound < curRound - 2) {
+          break;
         }
+        safeSend(ws, buildGreedyPerUserOutcomePayload('GREEDY_SETTLEMENT', reqRound, uid, msg.clientSentElapsedMs));
         break;
       }
     }
