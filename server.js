@@ -56,17 +56,26 @@ const GREEDY_ROUND_MS = 40000;
 const GREEDY_BET_CUTOFF_MS = 29500;
 const GREEDY_SLOT_MULTIPLIERS = [5, 5, 5, 5, 10, 15, 25, 45];
 const GREEDY_ALLOWED_CHIPS = new Set([100, 1000, 10000, 50000, 100000, 200000, 500000, 1000000, 5000000]);
-const GREEDY_INITIAL_COINS = 2500000;
+const GREEDY_INITIAL_COINS = 0;
+const GREEDY_MAX_BALANCE = 500000000;
 const GREEDY_MAX_BETS_PER_ROUND = 40;
+const WALLET_RECHARGE_PACKS = {
+  p1: 800000,
+  p2: 3549000,
+  p3: 7099000,
+  p4: 17290000,
+};
+const WALLET_EXCHANGE_COINS = new Set([330, 3300, 33000, 330000, 3300000]);
 const GREEDY_HMAC_SECRET = process.env.GREEDY_HMAC_SECRET || crypto.randomBytes(32).toString('hex');
 
 const greedySubscribers = new Set(); // Only sockets actively viewing Greedy Baby
 const greedyRoundBets = new Map();   // Map<roundNumber, Map<userId, { userId, nickname, avatarUri, slotBets, updatedAt }>>
 const greedyRecentChips = new Map(); // Map<roundNumber, Array<{ slotId, chipIndex, userId }>>
 const greedySettlements = new Map(); // Map<roundNumber, CachedSettlement>
-const greedyUserBalances = new Map(); // Map<userId, number> (Server-authoritative coins)
+const greedyUserBalances = new Map(); // Map<userId, number> (Server-authoritative unified Wallet + Game coins)
 const greedyRoundBetCounts = new Map(); // Map<roundNumber, Map<userId, number>>
 const greedyLastBetAtMs = new Map(); // Map<userId, number>
+const greedyLastRewardAtMs = new Map(); // Map<userId, number>
 let greedyDayIndex = Math.floor(Date.now() / 86400000);
 let greedyTodayLeaderboard = new Map(); // Map<userId, { userId, userName, avatarUri, winCoins }>
 let greedyYesterdayLeaderboard = new Map();
@@ -87,14 +96,14 @@ function ensureGreedyDayFresh() {
 function getOrInitGreedyBalance(userId, clientBalanceHint = null) {
   if (!userId) return GREEDY_INITIAL_COINS;
   const parsedHint = Number(clientBalanceHint);
-  const hasValidHint = Number.isFinite(parsedHint) && parsedHint >= 0 && parsedHint <= GREEDY_INITIAL_COINS;
+  const hasValidHint = Number.isFinite(parsedHint) && parsedHint >= 0 && parsedHint <= GREEDY_MAX_BALANCE;
   if (!greedyUserBalances.has(userId)) {
     const startBal = hasValidHint ? Math.floor(parsedHint) : GREEDY_INITIAL_COINS;
     greedyUserBalances.set(userId, startBal);
     return startBal;
   }
   const curBal = greedyUserBalances.get(userId);
-  // Only allow client hint to adjust DOWNWARD (e.g. Store/Gift spends), NEVER upward (anti-cheat)
+  // Only allow passive clientBalanceHint to adjust DOWNWARD; upward wallet changes must use WALLET_* handlers.
   if (hasValidHint && Math.floor(parsedHint) < curBal) {
     greedyUserBalances.set(userId, Math.floor(parsedHint));
     return Math.floor(parsedHint);
@@ -1756,6 +1765,75 @@ wss.on('connection', (ws) => {
         });
         if (feedbacks.length > 500) feedbacks.shift();
         safeSend(ws, { type: 'FEEDBACK_ACK', ticketId: msg.ticket?.id || '' });
+        break;
+      }
+
+      case 'WALLET_INIT_SYNC': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (!uid) break;
+        if (!meta.userId) meta.userId = uid;
+        const serverBalance = getOrInitGreedyBalance(uid, msg.clientBalance);
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance });
+        break;
+      }
+
+      case 'WALLET_CREDIT_PACK': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (!uid) break;
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!meta.userId) meta.userId = uid;
+        const packCoins = WALLET_RECHARGE_PACKS[String(msg.packId || '')];
+        if (!packCoins) break;
+        const curBal = getOrInitGreedyBalance(uid);
+        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + packCoins);
+        greedyUserBalances.set(uid, newBal);
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        break;
+      }
+
+      case 'WALLET_EXCHANGE_DIAMONDS': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (!uid) break;
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!meta.userId) meta.userId = uid;
+        const exCoins = Number(msg.coins);
+        if (!Number.isInteger(exCoins) || !WALLET_EXCHANGE_COINS.has(exCoins)) break;
+        const curBal = getOrInitGreedyBalance(uid);
+        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + exCoins);
+        greedyUserBalances.set(uid, newBal);
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        break;
+      }
+
+      case 'WALLET_ADD_REWARD': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (!uid) break;
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!meta.userId) meta.userId = uid;
+        const amt = Number(msg.amount);
+        if (!Number.isInteger(amt) || amt <= 0 || amt > 15000000) break;
+        const now = Date.now();
+        const prevAt = greedyLastRewardAtMs.get(uid) || 0;
+        if (now - prevAt < 250) break;
+        greedyLastRewardAtMs.set(uid, now);
+        const curBal = getOrInitGreedyBalance(uid);
+        const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + amt);
+        greedyUserBalances.set(uid, newBal);
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
+        break;
+      }
+
+      case 'WALLET_SPEND': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (!uid) break;
+        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!meta.userId) meta.userId = uid;
+        const amt = Number(msg.amount);
+        if (!Number.isInteger(amt) || amt <= 0) break;
+        const curBal = getOrInitGreedyBalance(uid);
+        const newBal = Math.max(0, curBal - amt);
+        greedyUserBalances.set(uid, newBal);
+        safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
         break;
       }
 
