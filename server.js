@@ -388,17 +388,19 @@ function pushWalletSyncToUser(uid) {
   sendToUser(uid, { type: 'WALLET_BALANCE_SYNC', serverBalance: payload.coinsBalance });
 }
 
+const OFFICIAL_PACKAGE_NAME = 'com.aistudio.yovoiceparty.app';
+
 function validateIntegrityForWallet(uid, integrity) {
   if (!integrity) {
     return { ok: true };
   }
-  if (integrity.isClonedEnvironment) {
+  if (integrity.isClonedEnvironment || Number(integrity.userProfileSlot || 0) !== 0 || integrity.uidMatchesPackage === false || integrity.isKernelPathClean === false) {
     return {
       ok: false,
       error: `Clone / Dual-App detected (${(integrity.reasons || []).join(', ') || 'CLONE'}). Wallet actions are disabled.`,
     };
   }
-  if (integrity.packageName && integrity.packageName !== 'com.aistudio.justfun.masti') {
+  if (integrity.packageName && integrity.packageName !== OFFICIAL_PACKAGE_NAME) {
     return {
       ok: false,
       error: 'Tampered app package detected. Please install the official JustFun app.',
@@ -945,63 +947,63 @@ function createDefaultSeats() {
 // AUTHORITATIVE REAL-TIME USER LEVEL & EXP ENGINE (`Lv.0`..`Lv.50`)
 // EXP Sources (ONLY):
 //   1. Gift Send (`SEND_GIFT_TX`): 5 Coins spent = 1 EXP (min 1)
-//   2. Rocket Launch (`ROCKET_LAUNCHED`): Top 1-3 win 15x Coin Reward as EXP
+//   2. Rocket Launch (`ROCKET_LAUNCHED`): Top 1-3 (min 50,000 coins sent) win 1x Coin Reward as EXP
 //   3. Room Stay (`ROOM_STAY_CLAIM`): 10 mins = 1,000 EXP
 //      - Own Room Max: 10,000 EXP/day
 //      - Other Room Max: 20,000 EXP/day
 // ============================================================================
 const LEVEL_CUMULATIVE_EXP = {
   0: 0,
-  1: 5000,
-  2: 15000,
-  3: 30000,
-  4: 50000,
-  5: 80000,
-  6: 120000,
-  7: 170000,
-  8: 230000,
-  9: 300000,
-  10: 400000,
-  11: 520000,
-  12: 660000,
-  13: 820000,
-  14: 1000000,
-  15: 1200000,
-  16: 1420000,
-  17: 1660000,
-  18: 1920000,
-  19: 2200000,
-  20: 2500000,
-  21: 2820000,
-  22: 3160000,
-  23: 3520000,
-  24: 3900000,
-  25: 4300000,
-  26: 4600000,
-  27: 4902282,
-  28: 5363700,
-  29: 6500000,
-  30: 8000000,
-  31: 12000000,
-  32: 17000000,
-  33: 24000000,
-  34: 32000000,
-  35: 42000000,
-  36: 55000000,
-  37: 70000000,
-  38: 88000000,
-  39: 110000000,
-  40: 135000000,
-  41: 162000000,
-  42: 192000000,
-  43: 224000000,
-  44: 258000000,
-  45: 290000000,
-  46: 317066904,
-  47: 330256800,
-  48: 350000000,
-  49: 375000000,
-  50: 400000000,
+  1: 15000,
+  2: 45000,
+  3: 90000,
+  4: 150000,
+  5: 240000,
+  6: 360000,
+  7: 510000,
+  8: 690000,
+  9: 900000,
+  10: 1200000,
+  11: 1560000,
+  12: 1980000,
+  13: 2460000,
+  14: 3000000,
+  15: 3600000,
+  16: 4260000,
+  17: 4980000,
+  18: 5760000,
+  19: 6600000,
+  20: 7500000,
+  21: 8460000,
+  22: 9480000,
+  23: 10560000,
+  24: 11700000,
+  25: 12900000,
+  26: 13800000,
+  27: 14706846,
+  28: 16091100,
+  29: 19500000,
+  30: 24000000,
+  31: 36000000,
+  32: 51000000,
+  33: 72000000,
+  34: 96000000,
+  35: 126000000,
+  36: 165000000,
+  37: 210000000,
+  38: 264000000,
+  39: 330000000,
+  40: 405000000,
+  41: 486000000,
+  42: 576000000,
+  43: 672000000,
+  44: 774000000,
+  45: 870000000,
+  46: 951200712,
+  47: 990770400,
+  48: 1050000000,
+  49: 1125000000,
+  50: 1200000000,
 };
 
 const LEVEL_COIN_MILESTONES = [
@@ -1193,9 +1195,76 @@ const INVITE_COMMISSION_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 const userInviteLedgers = new Map();     // Map<userId, InviteLedger>
 const deviceInviteClaims = new Map();    // Map<fingerprintKey, { firstUserId, boundInviterId, boundAtMs }>
 const userKnownDevices = new Map();      // Map<userId, Set<fingerprintKey>>
+const userHardwareSignatures = new Map();// Map<userId, Set<hardwareSignature>>
+const userLastIps = new Map();           // Map<userId, Set<ip>>
 const deviceUserAccounts = new Map();    // Map<fingerprintKey, Set<userId>>
 const inviteBindRateLimits = new Map();  // Map<userId, Array<timestampMs>>
 const inviteTickerHistory = [];          // Array<{ id, userName, coins, reason, createdAtMs }>
+const INVITE_SECURITY_FILE = path.join(__dirname, '.invite_security_ledger.json');
+
+function saveInviteSecurityLedgerToDisk() {
+  try {
+    const out = {
+      claims: Object.fromEntries(deviceInviteClaims.entries()),
+      knownDevices: {},
+      hwSigs: {},
+      userIps: {},
+      ledgers: {},
+    };
+    userKnownDevices.forEach((set, uid) => { out.knownDevices[uid] = Array.from(set); });
+    userHardwareSignatures.forEach((set, uid) => { out.hwSigs[uid] = Array.from(set); });
+    userLastIps.forEach((set, uid) => { out.userIps[uid] = Array.from(set).slice(-6); });
+    userInviteLedgers.forEach((ledger, uid) => {
+      out.ledgers[uid] = {
+        ...ledger,
+        invitedFriends: Array.from((ledger.invitedFriends || new Map()).entries()),
+      };
+    });
+    fs.writeFileSync(INVITE_SECURITY_FILE, JSON.stringify(out), 'utf8');
+  } catch (err) {
+    console.warn('Failed to persist invite security ledger:', err.message);
+  }
+}
+
+function loadInviteSecurityLedgerFromDisk() {
+  try {
+    if (!fs.existsSync(INVITE_SECURITY_FILE)) return;
+    const raw = fs.readFileSync(INVITE_SECURITY_FILE, 'utf8');
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed.claims && typeof parsed.claims === 'object') {
+      Object.entries(parsed.claims).forEach(([k, v]) => deviceInviteClaims.set(k, v));
+    }
+    if (parsed.knownDevices && typeof parsed.knownDevices === 'object') {
+      Object.entries(parsed.knownDevices).forEach(([uid, arr]) => {
+        if (Array.isArray(arr)) userKnownDevices.set(uid, new Set(arr));
+      });
+    }
+    if (parsed.hwSigs && typeof parsed.hwSigs === 'object') {
+      Object.entries(parsed.hwSigs).forEach(([uid, arr]) => {
+        if (Array.isArray(arr)) userHardwareSignatures.set(uid, new Set(arr));
+      });
+    }
+    if (parsed.userIps && typeof parsed.userIps === 'object') {
+      Object.entries(parsed.userIps).forEach(([uid, arr]) => {
+        if (Array.isArray(arr)) userLastIps.set(uid, new Set(arr));
+      });
+    }
+    if (parsed.ledgers && typeof parsed.ledgers === 'object') {
+      Object.entries(parsed.ledgers).forEach(([uid, l]) => {
+        if (!l || typeof l !== 'object') return;
+        userInviteLedgers.set(uid, {
+          ...l,
+          invitedFriends: new Map(Array.isArray(l.invitedFriends) ? l.invitedFriends : []),
+        });
+      });
+    }
+  } catch (err) {
+    console.warn('Failed to load invite security ledger:', err.message);
+  }
+}
+
+loadInviteSecurityLedgerFromDisk();
 
 // ============================================================================
 // STRICT 3-ID PER PHONE HARDWARE LOCK (SERVER-AUTHORITATIVE + DISK PERSISTED)
@@ -1303,7 +1372,7 @@ function evaluateServerDeviceAccountSlot(uid, accountUid, profileObj, integrity)
   const keys = getDeviceKeysFromIntegrity(integrity);
   const existingAccounts = getRegisteredAccountsForDeviceKeys(keys);
 
-  if (integrity.isClonedEnvironment) {
+  if (integrity.isClonedEnvironment || Number(integrity.userProfileSlot || 0) !== 0 || integrity.uidMatchesPackage === false || integrity.isKernelPathClean === false || (integrity.packageName && integrity.packageName !== OFFICIAL_PACKAGE_NAME)) {
     return {
       allowed: false,
       reason: 'CLONE_DETECTED',
@@ -1406,25 +1475,46 @@ function getDeviceKeysFromIntegrity(integrity) {
   return keys;
 }
 
-function recordUserDeviceIntegrity(uid, integrity) {
+function recordUserDeviceIntegrity(uid, integrity, clientIp = '') {
   if (!uid || !integrity || typeof integrity !== 'object') return;
   const keys = getDeviceKeysFromIntegrity(integrity);
-  if (keys.length === 0) return;
 
-  let uDevs = userKnownDevices.get(uid);
-  if (!uDevs) {
-    uDevs = new Set();
-    userKnownDevices.set(uid, uDevs);
-  }
-  keys.forEach((k) => {
-    uDevs.add(k);
-    let dUsers = deviceUserAccounts.get(k);
-    if (!dUsers) {
-      dUsers = new Set();
-      deviceUserAccounts.set(k, dUsers);
+  if (keys.length > 0) {
+    let uDevs = userKnownDevices.get(uid);
+    if (!uDevs) {
+      uDevs = new Set();
+      userKnownDevices.set(uid, uDevs);
     }
-    dUsers.add(uid);
-  });
+    keys.forEach((k) => {
+      uDevs.add(k);
+      let dUsers = deviceUserAccounts.get(k);
+      if (!dUsers) {
+        dUsers = new Set();
+        deviceUserAccounts.set(k, dUsers);
+      }
+      dUsers.add(uid);
+    });
+  }
+
+  const hwSig = String(integrity.hardwareSignature || '').trim();
+  if (hwSig) {
+    let hwSet = userHardwareSignatures.get(uid);
+    if (!hwSet) {
+      hwSet = new Set();
+      userHardwareSignatures.set(uid, hwSet);
+    }
+    hwSet.add(hwSig);
+  }
+
+  const cleanIp = String(clientIp || '').trim();
+  if (cleanIp) {
+    let ipSet = userLastIps.get(uid);
+    if (!ipSet) {
+      ipSet = new Set();
+      userLastIps.set(uid, ipSet);
+    }
+    ipSet.add(cleanIp);
+  }
 
   const existing = users.get(uid);
   if (existing) {
@@ -1445,12 +1535,35 @@ function isDeviceAlreadyClaimedForKeys(keys) {
   return false;
 }
 
-function shareSameDevice(uidA, uidB, currentKeys = []) {
+function shareSameDevice(uidA, uidB, currentKeys = [], integrity = null, clientIp = '') {
   const devsA = new Set([...(userKnownDevices.get(uidA) || []), ...currentKeys]);
   const devsB = userKnownDevices.get(uidB);
-  if (!devsB || devsA.size === 0) return false;
-  for (const k of devsA) {
-    if (devsB.has(k)) return true;
+  if (devsB && devsA.size > 0) {
+    for (const k of devsA) {
+      if (devsB.has(k)) return true;
+    }
+  }
+  // Catch Dual-App / Cloner where ANDROID_ID changed & MediaDrm failed, by matching same hardwareSignature + same clientIp
+  const hwA = new Set(userHardwareSignatures.get(uidA) || []);
+  const curHw = String(integrity?.hardwareSignature || '').trim();
+  if (curHw) hwA.add(curHw);
+  const hwB = userHardwareSignatures.get(uidB);
+
+  const ipsA = new Set(userLastIps.get(uidA) || []);
+  const cleanIp = String(clientIp || '').trim();
+  if (cleanIp) ipsA.add(cleanIp);
+  const ipsB = userLastIps.get(uidB);
+
+  if (hwB && ipsB && hwA.size > 0 && ipsA.size > 0) {
+    let hwOverlap = false;
+    for (const h of hwA) {
+      if (hwB.has(h)) { hwOverlap = true; break; }
+    }
+    if (hwOverlap) {
+      for (const ip of ipsA) {
+        if (ipsB.has(ip)) return true;
+      }
+    }
   }
   return false;
 }
@@ -1459,7 +1572,13 @@ function validateIntegrityForInvite(integrity) {
   if (!integrity || typeof integrity !== 'object') {
     return { ok: false, error: 'Device integrity check missing. Please restart the app.' };
   }
-  if (integrity.isClonedEnvironment) {
+  if (integrity.packageName && integrity.packageName !== OFFICIAL_PACKAGE_NAME) {
+    return {
+      ok: false,
+      error: 'Tampered/Cloned APK package detected. Please install the official JustFun app.',
+    };
+  }
+  if (integrity.isClonedEnvironment || Number(integrity.userProfileSlot || 0) !== 0 || integrity.uidMatchesPackage === false || integrity.isKernelPathClean === false) {
     const reasonCode = Array.isArray(integrity.reasons) && integrity.reasons.length > 0
       ? integrity.reasons[0]
       : 'CLONE_DETECTED';
@@ -1634,9 +1753,12 @@ const ROCKET_TARGETS = {
   3: 10000000,
 };
 
+const ROCKET_MIN_TOP_COINS = 50000;
+const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+
 function getNextDailyResetMs() {
   const dayMs = 24 * 60 * 60 * 1000;
-  return (Math.floor(Date.now() / dayMs) + 1) * dayMs;
+  return (Math.floor((Date.now() + IST_OFFSET_MS) / dayMs) + 1) * dayMs - IST_OFFSET_MS;
 }
 
 function createInitialRocketState() {
@@ -1661,13 +1783,37 @@ function ensureRocketDailyFresh(room) {
   }
 }
 
+function resolveLiveUserAvatar(uid, fallbackAvatar = '') {
+  const uProf = users.get(uid);
+  const liveAv = uProf?.avatarUri && !String(uProf.avatarUri).startsWith('res://') ? String(uProf.avatarUri) : '';
+  const fb = fallbackAvatar && !String(fallbackAvatar).startsWith('res://') ? String(fallbackAvatar) : '';
+  return liveAv || fb || uProf?.avatarUri || fallbackAvatar || '';
+}
+
 function buildRocketStatePayload(room) {
   ensureRocketDailyFresh(room);
   const rs = room.rocketState;
   const lvl = Math.min(3, Math.max(1, Number(rs.level || 1)));
   const contribs = Array.from(rs.contributors.values())
+    .filter((c) => Number(c.coins || 0) >= ROCKET_MIN_TOP_COINS)
     .sort((a, b) => Number(b.coins || 0) - Number(a.coins || 0))
-    .slice(0, 20);
+    .slice(0, 20)
+    .map((c) => {
+      const uProf = users.get(c.userId);
+      return {
+        ...c,
+        nickname: uProf?.nickname || c.nickname || `User ${c.userId}`,
+        avatarUri: resolveLiveUserAvatar(c.userId, c.avatarUri),
+      };
+    });
+  const history = (Array.isArray(rs.history) ? rs.history.slice(0, 20) : []).map((h) => {
+    const tProf = h.topGifterId ? users.get(h.topGifterId) : null;
+    return {
+      ...h,
+      topGifterName: tProf?.nickname || h.topGifterName || 'Top Gifter',
+      topGifterAvatarUri: h.topGifterId ? resolveLiveUserAvatar(h.topGifterId, h.topGifterAvatarUri) : (h.topGifterAvatarUri || ''),
+    };
+  });
   return {
     roomId: room.id,
     level: lvl,
@@ -1676,7 +1822,7 @@ function buildRocketStatePayload(room) {
     allLaunched: Boolean(rs.allLaunched),
     resetAtMs: Number(rs.resetAtMs || getNextDailyResetMs()),
     contributors: contribs,
-    history: Array.isArray(rs.history) ? rs.history.slice(0, 20) : [],
+    history,
   };
 }
 
@@ -1692,17 +1838,22 @@ function computeRocketLaunchRewards(level, sortedContribs, room) {
   const expByUser = {};
   const winners = [];
 
-  for (let i = 0; i < Math.min(3, sortedContribs.length); i++) {
-    const c = sortedContribs[i];
+  const qualifiedTop = Array.isArray(sortedContribs)
+    ? sortedContribs.filter((c) => Number(c?.coins || 0) >= ROCKET_MIN_TOP_COINS)
+    : [];
+
+  for (let i = 0; i < Math.min(3, qualifiedTop.length); i++) {
+    const c = qualifiedTop[i];
     if (!c || !c.userId) continue;
     const amt = topRewards[i];
-    const expWon = amt * 15; // Matches Rocket Reward Card ("15 times EXP")
+    const expWon = amt; // 1x Coin Reward as EXP (no 15x extra)
+    const uProf = users.get(c.userId);
     rewardsByUser[c.userId] = amt;
     expByUser[c.userId] = expWon;
     winners.push({
       userId: c.userId,
-      nickname: c.nickname || `User ${c.userId}`,
-      avatarUri: c.avatarUri || '',
+      nickname: uProf?.nickname || c.nickname || `User ${c.userId}`,
+      avatarUri: resolveLiveUserAvatar(c.userId, c.avatarUri),
       coinsWon: amt,
       expWon,
       isTopContributor: true,
@@ -3087,12 +3238,13 @@ app.post('/api/admin/users/medal-level', requireAdminAuth, (req, res) => {
   if (!userId) return res.status(400).json({ error: 'userId is required' });
   const prof = users.get(userId) || { userId, user8DigitId: userId, nickname: `User ${userId}` };
   if (req.body.level !== null && req.body.level !== undefined && req.body.level !== '') {
-    const newLv = Math.max(0, Math.min(100, Math.floor(Number(req.body.level))));
-    const st = getOrInitUserLevelState(userId);
+    const newLv = Math.max(0, Math.min(50, Math.floor(Number(req.body.level))));
+    const st = getOrCreateUserLevelState(userId);
     st.level = newLv;
-    st.exp = getTotalExpForLevel(newLv);
+    st.exp = LEVEL_CUMULATIVE_EXP[newLv] ?? 0;
     userLevels.set(userId, st);
     prof.level = newLv;
+    broadcastUserLevelToRooms(userId, newLv);
     sendToUser(userId, buildLevelStatePayload(userId));
   }
   const medalId = String(req.body.medalId || '').trim();
@@ -3248,8 +3400,10 @@ wss.on('close', () => {
   clearInterval(pingInterval);
 });
 
-wss.on('connection', (ws) => {
-  const meta = { userId: '', roomId: '', missedPings: 0 };
+wss.on('connection', (ws, req) => {
+  const forwarded = String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  const clientIp = forwarded || String(req?.socket?.remoteAddress || '').replace('::ffff:', '').trim();
+  const meta = { userId: '', roomId: '', missedPings: 0, clientIp };
   clientMeta.set(ws, meta);
   homeSubscribers.add(ws);
 
@@ -3383,7 +3537,8 @@ wss.on('connection', (ws) => {
         users.set(uid, merged);
         pruneAndSyncUserStore(uid);
         if (msg.deviceIntegrity) {
-          recordUserDeviceIntegrity(uid, msg.deviceIntegrity);
+          recordUserDeviceIntegrity(uid, msg.deviceIntegrity, meta.clientIp);
+          saveInviteSecurityLedgerToDisk();
         }
         evaluateInviteDay3Retention(uid, msg.deviceIntegrity || null);
         safeSend(ws, { type: 'USER_REGISTERED', profile: users.get(uid) || merged });
@@ -4037,29 +4192,35 @@ wss.on('connection', (ws) => {
                 const excess = rs.currentExp - target;
                 const sortedContribs = Array.from(rs.contributors.values())
                   .sort((a, b) => Number(b.coins || 0) - Number(a.coins || 0));
-                const topGifter = sortedContribs[0] || {
+                const eligibleTopContribs = sortedContribs.filter(
+                  (c) => Number(c.coins || 0) >= ROCKET_MIN_TOP_COINS
+                );
+                const topGifter = eligibleTopContribs[0] || sortedContribs[0] || {
                   userId: fromUserId,
                   nickname: contribEntry.nickname,
                   avatarUri: contribEntry.avatarUri,
                   coins: coinsSpent,
                 };
 
-                const { rewardsByUser, expByUser, winners, totalPoolCoins } = computeRocketLaunchRewards(lvl, sortedContribs, room);
+                const { rewardsByUser, expByUser, winners, totalPoolCoins } = computeRocketLaunchRewards(lvl, eligibleTopContribs, room);
                 const launchId = `rocket_${room.id}_L${lvl}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
                 const launchedAtMs = Date.now();
+
+                const resolvedTopGifterAvatar = resolveLiveUserAvatar(topGifter.userId, topGifter.avatarUri);
+                const resolvedTopGifterName = users.get(topGifter.userId)?.nickname || topGifter.nickname || 'Top Gifter';
 
                 rs.history.unshift({
                   launchId,
                   level: lvl,
                   topGifterId: topGifter.userId,
-                  topGifterName: topGifter.nickname || 'Top Gifter',
-                  topGifterAvatarUri: topGifter.avatarUri || '',
+                  topGifterName: resolvedTopGifterName,
+                  topGifterAvatarUri: resolvedTopGifterAvatar,
                   totalPoolCoins,
                   launchedAtMs,
                 });
                 rs.history = rs.history.slice(0, 30);
 
-                // Credit Rocket 15x EXP AND Rocket Blast Coins authoritatively on server
+                // Credit Rocket 1x EXP AND Rocket Blast Coins authoritatively on server
                 for (const [winnerUid, expAmt] of Object.entries(expByUser)) {
                   if (Number(expAmt) > 0) {
                     grantUserExp(winnerUid, Number(expAmt), `ROCKET_L${lvl}`);
@@ -4089,8 +4250,8 @@ wss.on('connection', (ws) => {
                   launchId,
                   level: lvl,
                   topGifterId: topGifter.userId,
-                  topGifterName: topGifter.nickname || 'Top Gifter',
-                  topGifterAvatarUri: topGifter.avatarUri || '',
+                  topGifterName: resolvedTopGifterName,
+                  topGifterAvatarUri: resolvedTopGifterAvatar,
                   totalPoolCoins,
                   rewardsByUser,
                   expByUser,
@@ -5482,7 +5643,7 @@ wss.on('connection', (ws) => {
           safeSend(ws, { type: 'INVITE_BIND_RESULT', success: false, error: intCheck.error });
           break;
         }
-        recordUserDeviceIntegrity(uid, integrity);
+        recordUserDeviceIntegrity(uid, integrity, meta.clientIp);
 
         // 3. Account-level already bound check
         const myLedger = getOrCreateInviteLedger(uid);
@@ -5515,7 +5676,7 @@ wss.on('connection', (ws) => {
           });
           break;
         }
-        if (shareSameDevice(uid, code, intCheck.keys)) {
+        if (shareSameDevice(uid, code, intCheck.keys, integrity, meta.clientIp)) {
           safeSend(ws, {
             type: 'INVITE_BIND_RESULT',
             success: false,
@@ -5561,6 +5722,7 @@ wss.on('connection', (ws) => {
 
         const inviterName = inviterUser?.nickname || inviterRoom?.hostName || `User ${code}`;
         pushInviteTicker(inviterName, INVITE_DAY1_COINS, 'FRIEND_JOIN');
+        saveInviteSecurityLedgerToDisk();
 
         safeSend(ws, {
           type: 'INVITE_BIND_RESULT',
@@ -5581,7 +5743,7 @@ wss.on('connection', (ws) => {
         if (!uid) break;
         if (!meta.userId) meta.userId = uid;
 
-        if (integrity && integrity.isClonedEnvironment) {
+        if (integrity && (integrity.isClonedEnvironment || Number(integrity.userProfileSlot || 0) !== 0 || integrity.uidMatchesPackage === false || integrity.isKernelPathClean === false)) {
           safeSend(ws, {
             type: 'INVITE_WITHDRAW_RESULT',
             success: false,
