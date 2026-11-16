@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
+const firestoreStore = require('./firestoreStore');
 
 const PORT = process.env.PORT || 8080;
 
@@ -154,6 +155,7 @@ const GREEDY_HMAC_SECRET = process.env.GREEDY_HMAC_SECRET || crypto.randomBytes(
 
 const greedySubscribers = new Set(); // Only sockets actively viewing Greedy Baby
 const greedyRoundBets = new Map();   // Map<roundNumber, Map<userId, { userId, nickname, avatarUri, slotBets, updatedAt }>>
+const greedyRoundSlotTotals = new Map(); // Map<roundNumber, number[8]> O(1) running slot totals
 const greedyRecentChips = new Map(); // Map<roundNumber, Array<{ slotId, chipIndex, userId }>>
 const greedySettlements = new Map(); // Map<roundNumber, CachedSettlement>
 const greedyUserBalances = new Map(); // Map<userId, number> (Server-authoritative unified Wallet + Game coins)
@@ -165,6 +167,8 @@ const walletProcessedTxIds = new Map(); // Map<txId, { userId, amount, remaining
 const walletLastRechargeAt = new Map(); // Map<userId, number>
 const greedyRoundBetCounts = new Map(); // Map<roundNumber, Map<userId, number>>
 const greedyLastBetAtMs = new Map(); // Map<userId, number>
+let greedyCrowdBatch = null; // { roundNumber, events: Array<{ userId, slotIds, chipIndex }>, slotTotals, singleSourceWs }
+let greedyCrowdFlushTimer = null;
 
 // ============================================================================
 // REAL-TIME ANTI-CHEAT MASTI STORE & MY ITEMS ("MINE") ENGINE
@@ -314,6 +318,7 @@ function ensureGreedyDayFresh() {
     }
     greedyTodayLeaderboard = new Map();
     greedyDayIndex = curDay;
+    firestoreStore.markGlobalDirty();
   }
 }
 
@@ -465,6 +470,9 @@ function pruneOldGreedyRounds(currentRound) {
   for (const r of greedyRoundBets.keys()) {
     if (r < currentRound - 2) greedyRoundBets.delete(r);
   }
+  for (const r of greedyRoundSlotTotals.keys()) {
+    if (r < currentRound - 2) greedyRoundSlotTotals.delete(r);
+  }
   for (const r of greedyRoundBetCounts.keys()) {
     if (r < currentRound - 2) greedyRoundBetCounts.delete(r);
   }
@@ -477,27 +485,31 @@ function pruneOldGreedyRounds(currentRound) {
 }
 
 function computeGreedySlotTotals(roundNumber) {
+  const cached = greedyRoundSlotTotals.get(roundNumber);
+  if (cached) return [...cached];
   const totals = [0, 0, 0, 0, 0, 0, 0, 0];
   const bettors = greedyRoundBets.get(roundNumber);
-  if (!bettors) return totals;
-  for (const b of bettors.values()) {
-    for (let s = 0; s < 8; s++) {
-      totals[s] += Number(b.slotBets[s] || 0);
+  if (bettors) {
+    for (const b of bettors.values()) {
+      for (let s = 0; s < 8; s++) {
+        totals[s] += Number(b.slotBets[s] || 0);
+      }
     }
   }
-  return totals;
+  greedyRoundSlotTotals.set(roundNumber, totals);
+  return [...totals];
 }
 
-function formatGreedyLeaderboard(map) {
+function formatGreedyLeaderboard(map, limit = 15) {
   return Array.from(map.values())
     .filter((e) => Number(e.winCoins || 0) > 0)
     .sort((a, b) => Number(b.winCoins || 0) - Number(a.winCoins || 0))
-    .slice(0, 20)
+    .slice(0, limit)
     .map((e, idx) => ({
       rank: idx + 1,
       userId: e.userId,
       userName: e.userName || `User ${e.userId}`,
-      avatarUri: e.avatarUri || '',
+      avatarUri: resolveLiveUserAvatar(e.userId, e.avatarUri || ''),
       winCoins: Number(e.winCoins || 0),
     }));
 }
@@ -513,6 +525,7 @@ function computeAndCacheGreedySettlement(roundNumber) {
   const allWinners = [];
   const userWinAmountsById = {};
   const userBetTotalsById = {};
+  let anyPersistentChange = false;
 
   if (bettors) {
     for (const b of bettors.values()) {
@@ -521,6 +534,10 @@ function computeAndCacheGreedySettlement(roundNumber) {
         betTotal += Number(b.slotBets[s] || 0);
       }
       userBetTotalsById[b.userId] = betTotal;
+      if (betTotal > 0) {
+        firestoreStore.markUserDirty(b.userId);
+        anyPersistentChange = true;
+      }
 
       let winAmount = 0;
       for (const sId of winningSlots) {
@@ -537,7 +554,7 @@ function computeAndCacheGreedySettlement(roundNumber) {
 
         const userProf = users.get(b.userId) || {};
         const name = b.nickname || userProf.nickname || `User ${b.userId}`;
-        const avatar = b.avatarUri || userProf.avatarUri || '';
+        const avatar = resolveLiveUserAvatar(b.userId, b.avatarUri || '');
         allWinners.push({
           userId: b.userId,
           userName: name,
@@ -548,11 +565,15 @@ function computeAndCacheGreedySettlement(roundNumber) {
         greedyTodayLeaderboard.set(b.userId, {
           userId: b.userId,
           userName: name,
-          avatarUri: avatar,
+          avatarUri: avatar && String(avatar).startsWith('http') ? avatar : '',
           winCoins: Number(prevLb?.winCoins || 0) + winAmount,
         });
       }
     }
+  }
+
+  if (anyPersistentChange) {
+    firestoreStore.markGlobalDirty();
   }
 
   allWinners.sort((a, b) => b.winAmount - a.winAmount);
@@ -570,8 +591,8 @@ function computeAndCacheGreedySettlement(roundNumber) {
     topWinners,
     userWinAmountsById,
     userBetTotalsById,
-    todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard),
-    yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard),
+    todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard, 15),
+    yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard, 15),
     completedHistory: getGreedyResultHistory(roundNumber),
   };
   greedySettlements.set(roundNumber, cached);
@@ -580,7 +601,7 @@ function computeAndCacheGreedySettlement(roundNumber) {
 
 function buildGreedyPerUserOutcomePayload(type, roundNumber, userId, clientSentElapsedMs = 0) {
   const cached = computeAndCacheGreedySettlement(roundNumber);
-  return {
+  const payload = {
     type,
     roundNumber: cached.roundNumber,
     winningFoodId: cached.winningFoodId,
@@ -588,12 +609,15 @@ function buildGreedyPerUserOutcomePayload(type, roundNumber, userId, clientSentE
     userBetTotal: Number(cached.userBetTotalsById[userId] || 0),
     userWinAmount: Number(cached.userWinAmountsById[userId] || 0),
     serverBalance: userId ? getOrInitGreedyBalance(userId) : GREEDY_INITIAL_COINS,
-    todayRankList: cached.todayRankList,
-    yesterdayRankList: cached.yesterdayRankList,
     completedHistory: cached.completedHistory,
     serverNowMs: Date.now(),
     clientSentElapsedMs: Number(clientSentElapsedMs || 0),
   };
+  // Omit bulky leaderboards during 30s DRAW_REVEAL; send capped Today leaderboard only on SETTLEMENT
+  if (type === 'GREEDY_SETTLEMENT') {
+    payload.todayRankList = cached.todayRankList;
+  }
+  return payload;
 }
 
 function broadcastToGreedySubscribers(payloadObj, excludeWs = null) {
@@ -607,6 +631,56 @@ function broadcastToGreedySubscribers(payloadObj, excludeWs = null) {
     } else {
       greedySubscribers.delete(clientWs);
     }
+  }
+}
+
+function flushGreedyCrowdBetBatch() {
+  if (greedyCrowdFlushTimer) {
+    clearTimeout(greedyCrowdFlushTimer);
+    greedyCrowdFlushTimer = null;
+  }
+  const batch = greedyCrowdBatch;
+  greedyCrowdBatch = null;
+  if (!batch || greedySubscribers.size === 0 || batch.events.length === 0) return;
+  broadcastToGreedySubscribers(
+    {
+      type: 'GREEDY_BET_BATCH',
+      serverNowMs: Date.now(),
+      roundNumber: batch.roundNumber,
+      events: batch.events,
+      slotTotals: batch.slotTotals,
+    },
+    batch.singleSourceWs || null
+  );
+}
+
+function queueGreedyCrowdBetEvent(roundNumber, userId, slotIds, chipIndex, slotTotals, sourceWs) {
+  if (greedySubscribers.size === 0) return;
+  if (greedyCrowdBatch && greedyCrowdBatch.roundNumber !== roundNumber) {
+    flushGreedyCrowdBetBatch();
+  }
+  if (!greedyCrowdBatch) {
+    greedyCrowdBatch = {
+      roundNumber,
+      events: [],
+      slotTotals,
+      singleSourceWs: sourceWs || null,
+    };
+  } else {
+    if (greedyCrowdBatch.singleSourceWs !== sourceWs) {
+      greedyCrowdBatch.singleSourceWs = null;
+    }
+    greedyCrowdBatch.slotTotals = slotTotals;
+  }
+  if (greedyCrowdBatch.events.length < 14) {
+    greedyCrowdBatch.events.push({
+      userId,
+      slotIds,
+      chipIndex,
+    });
+  }
+  if (!greedyCrowdFlushTimer) {
+    greedyCrowdFlushTimer = setTimeout(flushGreedyCrowdBetBatch, 120);
   }
 }
 
@@ -1171,6 +1245,7 @@ function grantUserExp(uid, expGain, reason = 'EXP') {
       unlockedMilestones,
     })
   );
+  firestoreStore.markUserDirty(uid);
 
   return {
     newLevel: st.level,
@@ -1202,27 +1277,15 @@ const inviteBindRateLimits = new Map();  // Map<userId, Array<timestampMs>>
 const inviteTickerHistory = [];          // Array<{ id, userName, coins, reason, createdAtMs }>
 const INVITE_SECURITY_FILE = path.join(__dirname, '.invite_security_ledger.json');
 
-function saveInviteSecurityLedgerToDisk() {
+function saveInviteSecurityLedgerToDisk(affectedUserIds = [], affectedDeviceKeys = []) {
   try {
-    const out = {
-      claims: Object.fromEntries(deviceInviteClaims.entries()),
-      knownDevices: {},
-      hwSigs: {},
-      userIps: {},
-      ledgers: {},
-    };
-    userKnownDevices.forEach((set, uid) => { out.knownDevices[uid] = Array.from(set); });
-    userHardwareSignatures.forEach((set, uid) => { out.hwSigs[uid] = Array.from(set); });
-    userLastIps.forEach((set, uid) => { out.userIps[uid] = Array.from(set).slice(-6); });
-    userInviteLedgers.forEach((ledger, uid) => {
-      out.ledgers[uid] = {
-        ...ledger,
-        invitedFriends: Array.from((ledger.invitedFriends || new Map()).entries()),
-      };
-    });
-    fs.writeFileSync(INVITE_SECURITY_FILE, JSON.stringify(out), 'utf8');
+    affectedUserIds.forEach((u) => firestoreStore.markUserDirty(u));
+    affectedDeviceKeys.forEach((k) => firestoreStore.markDeviceDirty(k));
+    if (affectedUserIds.length === 0 && affectedDeviceKeys.length === 0) {
+      firestoreStore.markGlobalDirty();
+    }
   } catch (err) {
-    console.warn('Failed to persist invite security ledger:', err.message);
+    console.warn('Failed to mark invite security ledger dirty:', err.message);
   }
 }
 
@@ -1310,15 +1373,17 @@ function loadDeviceAccountLedgerFromDisk() {
   }
 }
 
-function saveDeviceAccountLedgerToDisk() {
+function saveDeviceAccountLedgerToDisk(affectedDeviceKeys = []) {
   try {
-    const out = {};
-    deviceAccountSlots.forEach((slotMap, devKey) => {
-      out[devKey] = Array.from(slotMap.values());
-    });
-    fs.writeFileSync(DEVICE_LEDGER_FILE, JSON.stringify(out, null, 2), 'utf8');
+    if (Array.isArray(affectedDeviceKeys) && affectedDeviceKeys.length > 0) {
+      affectedDeviceKeys.forEach((k) => firestoreStore.markDeviceDirty(k));
+    } else {
+      for (const dk of deviceAccountSlots.keys()) {
+        firestoreStore.markDeviceDirty(dk);
+      }
+    }
   } catch (err) {
-    console.warn('Failed to persist device account ledger:', err.message);
+    console.warn('Failed to mark device account ledger dirty:', err.message);
   }
 }
 
@@ -1406,7 +1471,7 @@ function evaluateServerDeviceAccountSlot(uid, accountUid, profileObj, integrity)
       ),
     };
     upsertAccountSlotAcrossDeviceKeys(keys, updatedSlot);
-    saveDeviceAccountLedgerToDisk();
+    saveDeviceAccountLedgerToDisk(keys);
     return {
       allowed: true,
       accounts: getRegisteredAccountsForDeviceKeys(keys),
@@ -1436,7 +1501,7 @@ function evaluateServerDeviceAccountSlot(uid, accountUid, profileObj, integrity)
       createdAtMs: Date.now(),
     };
     upsertAccountSlotAcrossDeviceKeys(keys, newSlot);
-    saveDeviceAccountLedgerToDisk();
+    saveDeviceAccountLedgerToDisk(keys);
   }
 
   return {
@@ -1684,6 +1749,8 @@ function evaluateInviteDay3Retention(uid, integrity = null) {
 
   const inviterName = users.get(inviterId)?.nickname || `User ${inviterId}`;
   pushInviteTicker(inviterName, INVITE_DAY3_COINS, 'DAY3_LOGIN');
+  firestoreStore.markUserDirty(uid);
+  firestoreStore.markUserDirty(inviterId);
   pushInviteSyncToUser(inviterId);
   pushInviteSyncToUser(uid, integrity);
 }
@@ -1719,6 +1786,8 @@ function creditInviteRechargeProgress(uid, packCoins) {
   if (rec) {
     inviterLedger.invitedFriends.set(uid, rec);
   }
+  firestoreStore.markUserDirty(uid);
+  firestoreStore.markUserDirty(inviterId);
   pushInviteSyncToUser(inviterId);
 }
 
@@ -1744,6 +1813,8 @@ function creditInviteGiftCommission(fromUserId, coinsSpent) {
   }
   inviterLedger.withdrawableCoins += rebate;
   inviterLedger.totalCoinsRewarded += rebate;
+  firestoreStore.markUserDirty(fromUserId);
+  firestoreStore.markUserDirty(inviterId);
   pushInviteSyncToUser(inviterId);
 }
 
@@ -1780,6 +1851,7 @@ function ensureRocketDailyFresh(room) {
   }
   if (Date.now() >= Number(room.rocketState.resetAtMs || 0)) {
     room.rocketState = createInitialRocketState();
+    firestoreStore.markRoomDirty(room.id);
   }
 }
 
@@ -2038,21 +2110,27 @@ function broadcastToRoom(room, payloadObj, excludeUserId = null) {
   }
 }
 
+let homeLiveRoomsTimer = null;
 function broadcastLiveRoomsToHome() {
-  const payload = JSON.stringify({
-    type: 'LIVE_ROOMS_UPDATE',
-    serverNowMs: Date.now(),
-    rooms: getLiveRoomsSummary(),
-  });
-  for (const clientWs of homeSubscribers) {
-    if (clientWs.readyState === WebSocket.OPEN) {
-      try {
-        clientWs.send(payload);
-      } catch (_) {}
-    } else {
-      homeSubscribers.delete(clientWs);
+  if (homeLiveRoomsTimer) return;
+  homeLiveRoomsTimer = setTimeout(() => {
+    homeLiveRoomsTimer = null;
+    if (homeSubscribers.size === 0) return;
+    const payload = JSON.stringify({
+      type: 'LIVE_ROOMS_UPDATE',
+      serverNowMs: Date.now(),
+      rooms: getLiveRoomsSummary(),
+    });
+    for (const clientWs of homeSubscribers) {
+      if (clientWs.readyState === WebSocket.OPEN) {
+        try {
+          clientWs.send(payload);
+        } catch (_) {}
+      } else {
+        homeSubscribers.delete(clientWs);
+      }
     }
-  }
+  }, 180);
 }
 
 function removeUserFromRoom(ws, roomId, userId) {
@@ -2113,6 +2191,7 @@ app.get('/', (req, res) => {
     totalSavedRooms: rooms.size,
     registeredUsers: users.size,
     uptimeSeconds: Math.floor(process.uptime()),
+    firestore: firestoreStore.getStatus(),
   });
 });
 
@@ -3055,6 +3134,7 @@ app.post('/api/admin/users/ban', requireAdminAuth, (req, res) => {
     bannedUserIds.delete(userId);
     sendToUser(userId, { type: 'ACCOUNT_UNBANNED', userId });
   }
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, userId, banned: ban });
 });
 
@@ -3084,6 +3164,7 @@ app.post('/api/admin/devices/ban', requireAdminAuth, (req, res) => {
     } else {
       bannedDeviceKeys.delete(k);
     }
+    firestoreStore.markDeviceDirty(k);
   });
   res.json({ ok: true, affectedKeys: Array.from(keysToAffect), banned: ban });
 });
@@ -3091,8 +3172,9 @@ app.post('/api/admin/devices/ban', requireAdminAuth, (req, res) => {
 app.post('/api/admin/devices/reset-slots', requireAdminAuth, (req, res) => {
   const target = String(req.body.target || '').trim();
   if (!target) {
+    const allKeys = Array.from(deviceAccountSlots.keys());
     deviceAccountSlots.clear();
-    saveDeviceAccountLedgerToDisk();
+    saveDeviceAccountLedgerToDisk(allKeys);
     return res.json({ ok: true, cleared: 'ALL' });
   }
   const keys = new Set();
@@ -3105,7 +3187,7 @@ app.post('/api/admin/devices/reset-slots', requireAdminAuth, (req, res) => {
     });
   }
   keys.forEach((k) => deviceAccountSlots.delete(k));
-  saveDeviceAccountLedgerToDisk();
+  saveDeviceAccountLedgerToDisk(Array.from(keys));
   res.json({ ok: true, clearedKeys: Array.from(keys) });
 });
 
@@ -3149,6 +3231,7 @@ app.post('/api/admin/wallet/adjust', requireAdminAuth, (req, res) => {
     'Wallet Updated by Official Admin',
     `${title}: Coins=${nextCoins.toLocaleString('en-US')}, Diamonds=${nextDiamonds.toLocaleString('en-US')}`
   );
+  firestoreStore.markUserDirty(userId);
   res.json({ ok: true, userId, coins: nextCoins, diamonds: nextDiamonds });
 });
 
@@ -3159,6 +3242,7 @@ app.post('/api/admin/wallet/packs', requireAdminAuth, (req, res) => {
   if (!packId) return res.status(400).json({ error: 'packId is required' });
   WALLET_RECHARGE_PACKS[packId] = { coins, priceInr };
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, rechargePacks: WALLET_RECHARGE_PACKS });
 });
 
@@ -3175,6 +3259,7 @@ app.post('/api/admin/gifts', requireAdminAuth, (req, res) => {
   const gift = { id, name, icon, priceCoins, tag, category, animationUrl, durationSeconds };
   DYNAMIC_GIFTS_CATALOG.set(id, gift);
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, gift });
 });
 
@@ -3182,6 +3267,7 @@ app.delete('/api/admin/gifts/:id', requireAdminAuth, (req, res) => {
   const id = String(req.params.id || '').trim();
   DYNAMIC_GIFTS_CATALOG.delete(id);
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, deletedId: id });
 });
 
@@ -3195,6 +3281,7 @@ app.post('/api/admin/store/catalog', requireAdminAuth, (req, res) => {
   if (!name) return res.status(400).json({ error: 'Item name is required' });
   STORE_CATALOG[id] = { id, name, category, basePrice7Days, iconUrl, specialIdNumber };
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, item: STORE_CATALOG[id] });
 });
 
@@ -3202,6 +3289,7 @@ app.delete('/api/admin/store/catalog/:id', requireAdminAuth, (req, res) => {
   const id = String(req.params.id || '').trim();
   delete STORE_CATALOG[id];
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, deletedId: id });
 });
 
@@ -3230,6 +3318,7 @@ app.post('/api/admin/store/grant', requireAdminAuth, (req, res) => {
     '🎁 VIP Store Item Granted!',
     `Official Admin granted you "${spec.name}" (${days} Days) and equipped it automatically!`
   );
+  firestoreStore.markUserDirty(userId);
   res.json({ ok: true, userId, itemId, days });
 });
 
@@ -3256,6 +3345,7 @@ app.post('/api/admin/users/medal-level', requireAdminAuth, (req, res) => {
   users.set(userId, prof);
   sendToUser(userId, { type: 'USER_REGISTERED', profile: prof });
   pushSystemNotificationToUser(userId, '🏅 Profile Upgraded by Admin!', `Your Level/Medals were updated by Official Admin.`);
+  firestoreStore.markUserDirty(userId);
   res.json({ ok: true, profile: prof });
 });
 
@@ -3268,6 +3358,7 @@ app.post('/api/admin/medals', requireAdminAuth, (req, res) => {
   const medal = { id, name, description, iconUrl };
   DYNAMIC_MEDALS_CATALOG.set(id, medal);
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, medal });
 });
 
@@ -3311,6 +3402,8 @@ app.post('/api/admin/broadcast', requireAdminAuth, (req, res) => {
     dmUnreadCounts.set(`${uid}:10000`, (dmUnreadCounts.get(`${uid}:10000`) || 0) + 1);
     sendToUser(uid, { type: 'NEW_DM', peerUserId: '10000', message: dmItem });
     pushSocialSyncToUser(uid);
+    firestoreStore.markDmDirty(threadKey);
+    firestoreStore.markUserDirty(uid);
   });
   res.json({ ok: true, sentCount: targets.length });
 });
@@ -3324,6 +3417,7 @@ app.post('/api/admin/events', requireAdminAuth, (req, res) => {
   const ev = { id, title, subtitle, bannerUrl, createdAtMs: Date.now() };
   DYNAMIC_EVENTS_CATALOG.set(id, ev);
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, event: ev });
 });
 
@@ -3331,6 +3425,7 @@ app.delete('/api/admin/events/:id', requireAdminAuth, (req, res) => {
   const id = String(req.params.id || '').trim();
   DYNAMIC_EVENTS_CATALOG.delete(id);
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, deletedId: id });
 });
 
@@ -3354,6 +3449,7 @@ app.post('/api/admin/rules', requireAdminAuth, (req, res) => {
     DAILY_CHECKIN_REWARD_COINS = Math.max(0, Math.floor(Number(req.body.dailyCheckInCoins)));
   }
   broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
   res.json({ ok: true, rules: buildDynamicCatalogPayload().rules });
 });
 
@@ -3363,6 +3459,7 @@ app.post('/api/admin/rooms/official', requireAdminAuth, (req, res) => {
   const room = rooms.get(roomId);
   if (!room) return res.status(404).json({ error: 'Room not found' });
   room.isOfficial = isOfficial;
+  firestoreStore.markRoomDirty(roomId);
   broadcastLiveRoomsToHome();
   res.json({ ok: true, roomId, isOfficial });
 });
@@ -3462,7 +3559,7 @@ wss.on('connection', (ws, req) => {
             }
           });
           if (changed) {
-            saveDeviceAccountLedgerToDisk();
+            saveDeviceAccountLedgerToDisk(keys);
           }
         }
         const authoritativeAccounts = getRegisteredAccountsForDeviceKeys(keys);
@@ -3538,8 +3635,9 @@ wss.on('connection', (ws, req) => {
         pruneAndSyncUserStore(uid);
         if (msg.deviceIntegrity) {
           recordUserDeviceIntegrity(uid, msg.deviceIntegrity, meta.clientIp);
-          saveInviteSecurityLedgerToDisk();
+          saveInviteSecurityLedgerToDisk([uid], getDeviceKeysFromIntegrity(msg.deviceIntegrity));
         }
+        firestoreStore.markUserDirty(uid);
         evaluateInviteDay3Retention(uid, msg.deviceIntegrity || null);
         safeSend(ws, { type: 'USER_REGISTERED', profile: users.get(uid) || merged });
         safeSend(ws, buildSocialSnapshotForUser(uid));
@@ -3609,6 +3707,7 @@ wss.on('connection', (ws, req) => {
         const targetUserId = String(msg.targetUserId || '');
         if (!targetUserId) break;
         recordProfileVisit(viewerUserId, targetUserId);
+        firestoreStore.markUserDirty(targetUserId);
         const target = users.get(targetUserId) || {
           userId: targetUserId,
           user8DigitId: targetUserId,
@@ -3688,6 +3787,8 @@ wss.on('connection', (ws, req) => {
 
         pushSocialSyncToUser(fromUserId);
         pushSocialSyncToUser(targetUserId);
+        firestoreStore.markUserDirty(fromUserId);
+        firestoreStore.markUserDirty(targetUserId);
         break;
       }
 
@@ -3717,6 +3818,8 @@ wss.on('connection', (ws, req) => {
 
         pushSocialSyncToUser(fromUserId);
         pushSocialSyncToUser(targetUserId);
+        firestoreStore.markUserDirty(fromUserId);
+        firestoreStore.markUserDirty(targetUserId);
         break;
       }
 
@@ -3843,6 +3946,7 @@ wss.on('connection', (ws, req) => {
           thread = thread.slice(-100);
           dmThreads.set(threadKey, thread);
         }
+        firestoreStore.markDmDirty(threadKey);
 
         if (toUserId === '10000') {
           sendToUser(fromUserId, { type: 'NEW_DM', peerUserId: '10000', message: dmItem });
@@ -3904,6 +4008,7 @@ wss.on('connection', (ws, req) => {
             const curThread = dmThreads.get(threadKey) || [];
             curThread.push(replyItem);
             dmThreads.set(threadKey, curThread);
+            firestoreStore.markDmDirty(threadKey);
             sendToUser(fromUserId, { type: 'NEW_DM', peerUserId: '10000', message: replyItem });
             pushSocialSyncToUser(fromUserId);
           }, 1050);
@@ -3925,8 +4030,10 @@ wss.on('connection', (ws, req) => {
         const userId = String(msg.userId || meta.userId || '');
         const peerUserId = String(msg.peerUserId || '');
         if (!userId || !peerUserId) break;
+        const threadKey = getThreadKey(userId, peerUserId);
         dmUnreadCounts.set(`${userId}:${peerUserId}`, 0);
-        dmThreads.delete(getThreadKey(userId, peerUserId));
+        dmThreads.delete(threadKey);
+        firestoreStore.markDmDirty(threadKey);
         pushSocialSyncToUser(userId);
         break;
       }
@@ -3936,7 +4043,8 @@ wss.on('connection', (ws, req) => {
         const peerUserId = String(msg.peerUserId || '');
         const msgId = String(msg.msgId || '');
         if (!userId || !peerUserId || !msgId) break;
-        const thread = dmThreads.get(getThreadKey(userId, peerUserId));
+        const threadKey = getThreadKey(userId, peerUserId);
+        const thread = dmThreads.get(threadKey);
         if (thread) {
           for (const item of thread) {
             if (item.id === msgId) {
@@ -3944,6 +4052,7 @@ wss.on('connection', (ws, req) => {
               if (!item.deletedBy.includes(userId)) item.deletedBy.push(userId);
             }
           }
+          firestoreStore.markDmDirty(threadKey);
         }
         sendToUser(userId, { type: 'DM_MESSAGE_DELETED', peerUserId, msgId });
         pushSocialSyncToUser(userId);
@@ -3966,6 +4075,7 @@ wss.on('connection', (ws, req) => {
           avatarUri: msg.targetAvatarUri || targetProf.avatarUri || '',
           blockedAtMs: Date.now(),
         });
+        firestoreStore.markUserDirty(fromUserId);
         pushSocialSyncToUser(fromUserId);
         break;
       }
@@ -3975,6 +4085,7 @@ wss.on('connection', (ws, req) => {
         const targetUserId = String(msg.targetUserId || '');
         if (!fromUserId || !targetUserId) break;
         blockedUsers.get(fromUserId)?.delete(targetUserId);
+        firestoreStore.markUserDirty(fromUserId);
         pushSocialSyncToUser(fromUserId);
         break;
       }
@@ -3983,6 +4094,7 @@ wss.on('connection', (ws, req) => {
         const uid = String(msg.userId || meta.userId || '');
         if (!uid) break;
         userDmPrivacy.set(uid, msg.mode === 'FOLLOWING' ? 'FOLLOWING' : 'ALL');
+        firestoreStore.markUserDirty(uid);
         pushSocialSyncToUser(uid);
         break;
       }
@@ -4008,13 +4120,15 @@ wss.on('connection', (ws, req) => {
         const peerUserId = String(msg.peerUserId || '');
         const msgId = String(msg.msgId || '');
         if (!userId || !peerUserId || !msgId) break;
-        const thread = dmThreads.get(getThreadKey(userId, peerUserId));
+        const threadKey = getThreadKey(userId, peerUserId);
+        const thread = dmThreads.get(threadKey);
         if (thread) {
           for (const item of thread) {
             if (item.id === msgId) {
               item.isRecalled = true;
             }
           }
+          firestoreStore.markDmDirty(threadKey);
         }
         sendToUser(userId, { type: 'DM_RECALLED', peerUserId, msgId });
         sendToUser(peerUserId, { type: 'DM_RECALLED', peerUserId: userId, msgId });
@@ -4028,7 +4142,8 @@ wss.on('connection', (ws, req) => {
         const peerUserId = String(msg.peerUserId || '');
         if (!userId || !peerUserId) break;
         dmUnreadCounts.set(`${userId}:${peerUserId}`, 0);
-        const thread = dmThreads.get(getThreadKey(userId, peerUserId));
+        const threadKey = getThreadKey(userId, peerUserId);
+        const thread = dmThreads.get(threadKey);
         let markedAny = false;
         if (thread) {
           for (const item of thread) {
@@ -4037,6 +4152,7 @@ wss.on('connection', (ws, req) => {
               markedAny = true;
             }
           }
+          if (markedAny) firestoreStore.markDmDirty(threadKey);
         }
         if (markedAny && peerUserId !== '10000') {
           sendToUser(peerUserId, {
@@ -4058,6 +4174,7 @@ wss.on('connection', (ws, req) => {
         for (const n of notices) n.isRead = true;
         const alerts = userFollowAlerts.get(userId) || [];
         for (const a of alerts) a.isRead = true;
+        firestoreStore.markUserDirty(userId);
         pushSocialSyncToUser(userId);
         break;
       }
@@ -4178,6 +4295,7 @@ wss.on('connection', (ws, req) => {
             existing.receivedGifts = gifts.slice(0, 30);
           }
           users.set(tUid, existing);
+          firestoreStore.markUserDirty(tUid);
           pushSocialSyncToUser(tUid);
 
           // Credit authoritative Diamonds to receiver (1 Coin gift = 1 Diamond, exchange = 33%)
@@ -4199,11 +4317,13 @@ wss.on('connection', (ws, req) => {
           const giftSendExp = Math.max(1, Math.floor(coinsSpent / 5));
           grantUserExp(fromUserId, giftSendExp, 'GIFT_SEND');
           creditInviteGiftCommission(fromUserId, coinsSpent);
+          firestoreStore.markUserDirty(fromUserId);
         }
 
         if (roomId && coinsSpent > 0) {
           const room = rooms.get(roomId) || getOrCreateRoom(roomId, { hostId: roomId });
           if (room) {
+            firestoreStore.markRoomDirty(room.id);
             room.roomTotalCharm = Number(room.roomTotalCharm || 0) + coinsSpent;
             const senderProf = users.get(fromUserId) || {};
             const contribEntry = {
@@ -4282,6 +4402,7 @@ wss.on('connection', (ws, req) => {
                     const prevB = getOrInitGreedyBalance(winnerUid);
                     const nextB = Math.min(GREEDY_MAX_BALANCE, prevB + coinAmt);
                     greedyUserBalances.set(winnerUid, nextB);
+                    firestoreStore.markUserDirty(winnerUid);
                     recordWalletTx(
                       winnerUid,
                       'COIN_USAGE',
@@ -4424,6 +4545,7 @@ wss.on('connection', (ws, req) => {
         if (hostAvatarUri) room.hostAvatarUri = hostAvatarUri;
         if (roomPassword !== undefined) room.roomPassword = String(roomPassword || '');
         room.updatedAt = Date.now();
+        firestoreStore.markRoomDirty(room.id);
         broadcastToRoom(room, buildRoomSnapshot(room));
         broadcastLiveRoomsToHome();
         break;
@@ -4583,6 +4705,7 @@ wss.on('connection', (ws, req) => {
           }
         }
         room.updatedAt = Date.now();
+        firestoreStore.markRoomDirty(room.id);
         broadcastToRoom(room, buildRoomSnapshot(room));
         if (fields.title !== undefined || fields.hostName !== undefined || fields.hostAvatarUri !== undefined || fields.roomPassword !== undefined) {
           broadcastLiveRoomsToHome();
@@ -4603,6 +4726,7 @@ wss.on('connection', (ws, req) => {
         if (room.messages.length > 80) {
           room.messages = room.messages.slice(-60);
         }
+        firestoreStore.markRoomDirty(room.id);
         broadcastToRoom(room, {
           type: 'NEW_MESSAGE',
           roomId,
@@ -4617,6 +4741,7 @@ wss.on('connection', (ws, req) => {
         if (!room) break;
         room.chatClearedAt = clearedAtMs || Date.now();
         room.messages = [];
+        firestoreStore.markRoomDirty(room.id);
         broadcastToRoom(room, buildRoomSnapshot(room));
         break;
       }
@@ -4788,12 +4913,16 @@ wss.on('connection', (ws, req) => {
         }
 
         walletDailyCheckIns.set(uid, todayKey);
-        devKeys.forEach((dk) => deviceDailyCheckIns.set(dk, todayKey));
+        devKeys.forEach((dk) => {
+          deviceDailyCheckIns.set(dk, todayKey);
+          firestoreStore.markDeviceDirty(dk);
+        });
 
         const curBal = getOrInitGreedyBalance(uid);
         const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + DAILY_CHECKIN_REWARD_COINS);
         greedyUserBalances.set(uid, newBal);
         recordWalletTx(uid, 'COIN_USAGE', 'Daily Check-In Bonus', `+${DAILY_CHECKIN_REWARD_COINS} Coins`, true, `checkin_${uid}_${todayKey}`);
+        firestoreStore.markUserDirty(uid);
 
         safeSend(ws, buildWalletStatePayload(uid, integrity));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
@@ -4870,6 +4999,7 @@ wss.on('connection', (ws, req) => {
         );
 
         creditInviteRechargeProgress(uid, packSpec.coins);
+        firestoreStore.markUserDirty(uid);
         safeSend(ws, buildWalletStatePayload(uid, integrity));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
         safeSend(ws, {
@@ -4936,6 +5066,7 @@ wss.on('connection', (ws, req) => {
           `+${exCoins.toLocaleString('en-US')} Coins`,
           true
         );
+        firestoreStore.markUserDirty(uid);
 
         safeSend(ws, buildWalletStatePayload(uid, integrity));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
@@ -5006,6 +5137,7 @@ wss.on('connection', (ws, req) => {
           });
         }
         recordWalletTx(uid, 'COIN_USAGE', title, `-${amt.toLocaleString('en-US')} Coins`, false, txId || null);
+        firestoreStore.markUserDirty(uid);
 
         safeSend(ws, buildWalletStatePayload(uid));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
@@ -5126,6 +5258,7 @@ wss.on('connection', (ws, req) => {
 
         const expGained = Math.max(1, Math.floor(price / 5));
         grantUserExp(uid, expGained, 'STORE_BUY');
+        firestoreStore.markUserDirty(uid);
 
         const activeRoomId = findUserActiveRoomId(uid);
         if (activeRoomId && rooms.has(activeRoomId)) {
@@ -5260,6 +5393,8 @@ wss.on('connection', (ws, req) => {
 
         const expGained = Math.max(1, Math.floor(price / 5));
         grantUserExp(uid, expGained, 'STORE_GIFT');
+        firestoreStore.markUserDirty(uid);
+        firestoreStore.markUserDirty(targetUserId);
 
         // Push real-time Store & My Items update to the recipient if online
         pushStoreSyncToUser(targetUserId);
@@ -5337,6 +5472,7 @@ wss.on('connection', (ws, req) => {
           }
         }
         pruneAndSyncUserStore(uid, nowMs);
+        firestoreStore.markUserDirty(uid);
 
         const activeRoomId = findUserActiveRoomId(uid);
         if (activeRoomId && rooms.has(activeRoomId)) {
@@ -5429,9 +5565,9 @@ wss.on('connection', (ws, req) => {
           break;
         }
 
-        // Anti-spam rate limiting (allows rapid coalesced bet batches without rejecting fast taps)
+        // Anti-spam rate limiting (allows rapid coalesced bet batches & hold-to-bet without false rejections)
         const prevBetAt = greedyLastBetAtMs.get(uid) || 0;
-        if (nowMs - prevBetAt < 15) {
+        if (nowMs - prevBetAt < 10) {
           safeSend(ws, {
             type: 'GREEDY_BET_REJECTED',
             reason: 'Too many bets! Slow down.',
@@ -5508,20 +5644,28 @@ wss.on('connection', (ws, req) => {
           greedyRoundBets.set(curRound, roundBettors);
         }
         const userProf = users.get(uid) || {};
+        const incomingHttpAvatar = msg.avatarUri && String(msg.avatarUri).startsWith('http') ? String(msg.avatarUri) : '';
         const existing = roundBettors.get(uid) || {
           userId: uid,
           nickname: msg.nickname || userProf.nickname || `User ${uid}`,
-          avatarUri: msg.avatarUri || userProf.avatarUri || '',
+          avatarUri: incomingHttpAvatar,
           slotBets: {},
           updatedAt: nowMs,
         };
         if (msg.nickname) existing.nickname = String(msg.nickname).slice(0, 32);
-        if (msg.avatarUri) existing.avatarUri = String(msg.avatarUri);
+        if (incomingHttpAvatar) existing.avatarUri = incomingHttpAvatar;
         existing.updatedAt = nowMs;
+
+        let cachedTotals = greedyRoundSlotTotals.get(curRound);
+        if (!cachedTotals) {
+          cachedTotals = computeGreedySlotTotals(curRound);
+          greedyRoundSlotTotals.set(curRound, cachedTotals);
+        }
 
         const betSlots = [];
         for (const [sId, sAmt] of validBets) {
           existing.slotBets[sId] = Number(existing.slotBets[sId] || 0) + sAmt;
+          cachedTotals[sId] = Number(cachedTotals[sId] || 0) + sAmt;
           betSlots.push(sId);
         }
         roundBettors.set(uid, existing);
@@ -5535,11 +5679,11 @@ wss.on('connection', (ws, req) => {
         betSlots.forEach((sId) => {
           chipHist.push({ slotId: sId, chipIndex: chipIdx, userId: uid });
         });
-        if (chipHist.length > 48) {
-          chipHist.splice(0, chipHist.length - 48);
+        if (chipHist.length > 32) {
+          chipHist.splice(0, chipHist.length - 32);
         }
 
-        const slotTotals = computeGreedySlotTotals(curRound);
+        const slotTotals = [...cachedTotals];
         safeSend(ws, {
           type: 'GREEDY_BET_ACK',
           roundNumber: curRound,
@@ -5549,15 +5693,7 @@ wss.on('connection', (ws, req) => {
           serverNowMs: nowMs,
         });
 
-        broadcastToGreedySubscribers({
-          type: 'GREEDY_BET_EVENT',
-          serverNowMs: nowMs,
-          roundNumber: curRound,
-          userId: uid,
-          slotIds: betSlots,
-          chipIndex: chipIdx,
-          slotTotals,
-        }, ws);
+        queueGreedyCrowdBetEvent(curRound, uid, betSlots, chipIdx, slotTotals, ws);
         break;
       }
 
@@ -5779,7 +5915,7 @@ wss.on('connection', (ws, req) => {
 
         const inviterName = inviterUser?.nickname || inviterRoom?.hostName || `User ${code}`;
         pushInviteTicker(inviterName, INVITE_DAY1_COINS, 'FRIEND_JOIN');
-        saveInviteSecurityLedgerToDisk();
+        saveInviteSecurityLedgerToDisk([uid, code], intCheck.keys);
 
         safeSend(ws, {
           type: 'INVITE_BIND_RESULT',
@@ -5825,6 +5961,7 @@ wss.on('connection', (ws, req) => {
         const newBal = Math.min(GREEDY_MAX_BALANCE, curBal + amount);
         greedyUserBalances.set(uid, newBal);
         recordWalletTx(uid, 'COIN_USAGE', 'Invite Friends Reward', `+${amount.toLocaleString('en-US')} Coins`, true);
+        firestoreStore.markUserDirty(uid);
 
         safeSend(ws, buildWalletStatePayload(uid, integrity));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
@@ -5865,6 +6002,133 @@ wss.on('connection', (ws, req) => {
   ws.on('error', scheduleGraceDisconnect);
 });
 
-server.listen(PORT, () => {
-  console.log(`JustFun Real-Time Voice & Social Backend running on port ${PORT}`);
+firestoreStore.bindStateRefs({
+  users,
+  greedyUserBalances,
+  userDiamonds,
+  userLevels,
+  walletTransactions,
+  walletDailyCheckIns,
+  userStoreInventories,
+  userInviteLedgers,
+  userFollowers,
+  userFollowing,
+  userVisitors,
+  blockedUsers,
+  userDmPrivacy,
+  userSystemNotices,
+  userFollowAlerts,
+  userKnownDevices,
+  userHardwareSignatures,
+  userLastIps,
+  rooms,
+  getOrCreateRoom,
+  deviceAccountSlots,
+  deviceInviteClaims,
+  deviceDailyCheckIns,
+  bannedDeviceKeys,
+  dmThreads,
+  DYNAMIC_GIFTS_CATALOG,
+  DYNAMIC_MEDALS_CATALOG,
+  DYNAMIC_EVENTS_CATALOG,
+  bannedUserIds,
+  getGreedyDayIndex: () => greedyDayIndex,
+  getGreedyTodayLeaderboard: () => greedyTodayLeaderboard,
+  getGreedyYesterdayLeaderboard: () => greedyYesterdayLeaderboard,
+  getAdminRules: () => ({
+    maxUnfollowedDmMessages: MAX_UNFOLLOWED_DM_MESSAGES,
+    maxAccountsPerDevice: MAX_ACCOUNTS_PER_DEVICE,
+    inviteDay1Coins: INVITE_DAY1_COINS,
+    inviteDay3Coins: INVITE_DAY3_COINS,
+    inviteFriendWelcomeCoins: INVITE_FRIEND_WELCOME_COINS,
+    dailyCheckInCoins: DAILY_CHECKIN_REWARD_COINS,
+  }),
+  applyHydratedGlobalState: (doc) => {
+    if (!doc || typeof doc !== 'object') return;
+    if (typeof doc.greedyDayIndex === 'number') {
+      greedyDayIndex = doc.greedyDayIndex;
+    }
+    if (Array.isArray(doc.greedyTodayLeaderboard)) {
+      greedyTodayLeaderboard = new Map();
+      doc.greedyTodayLeaderboard.forEach((e) => {
+        if (e && e.userId) greedyTodayLeaderboard.set(e.userId, e);
+      });
+    }
+    if (Array.isArray(doc.greedyYesterdayLeaderboard)) {
+      greedyYesterdayLeaderboard = new Map();
+      doc.greedyYesterdayLeaderboard.forEach((e) => {
+        if (e && e.userId) greedyYesterdayLeaderboard.set(e.userId, e);
+      });
+    }
+    ensureGreedyDayFresh();
+    if (Array.isArray(doc.dynamicGifts)) {
+      doc.dynamicGifts.forEach((g) => {
+        if (g && g.id) DYNAMIC_GIFTS_CATALOG.set(g.id, g);
+      });
+    }
+    if (Array.isArray(doc.dynamicMedals)) {
+      doc.dynamicMedals.forEach((m) => {
+        if (m && m.id) DYNAMIC_MEDALS_CATALOG.set(m.id, m);
+      });
+    }
+    if (Array.isArray(doc.dynamicEvents)) {
+      doc.dynamicEvents.forEach((ev) => {
+        if (ev && ev.id) DYNAMIC_EVENTS_CATALOG.set(ev.id, ev);
+      });
+    }
+    if (Array.isArray(doc.bannedUserIds)) {
+      doc.bannedUserIds.forEach((entry) => {
+        if (Array.isArray(entry) && entry[0]) bannedUserIds.set(entry[0], entry[1]);
+      });
+    }
+    if (doc.rules && typeof doc.rules === 'object') {
+      if (typeof doc.rules.maxUnfollowedDmMessages === 'number') {
+        MAX_UNFOLLOWED_DM_MESSAGES = Math.max(1, doc.rules.maxUnfollowedDmMessages);
+      }
+      if (typeof doc.rules.maxAccountsPerDevice === 'number') {
+        MAX_ACCOUNTS_PER_DEVICE = Math.max(1, doc.rules.maxAccountsPerDevice);
+      }
+      if (typeof doc.rules.inviteDay1Coins === 'number') INVITE_DAY1_COINS = doc.rules.inviteDay1Coins;
+      if (typeof doc.rules.inviteDay3Coins === 'number') INVITE_DAY3_COINS = doc.rules.inviteDay3Coins;
+      if (typeof doc.rules.inviteFriendWelcomeCoins === 'number') {
+        INVITE_FRIEND_WELCOME_COINS = doc.rules.inviteFriendWelcomeCoins;
+      }
+      if (typeof doc.rules.dailyCheckInCoins === 'number') DAILY_CHECKIN_REWARD_COINS = doc.rules.dailyCheckInCoins;
+    }
+  },
 });
+
+async function startServer() {
+  try {
+    await firestoreStore.hydrateFromCloud();
+    // Rebuild reverse device->user index after hydration
+    userKnownDevices.forEach((keys, uid) => {
+      keys.forEach((k) => {
+        let dUsers = deviceUserAccounts.get(k);
+        if (!dUsers) {
+          dUsers = new Set();
+          deviceUserAccounts.set(k, dUsers);
+        }
+        dUsers.add(uid);
+      });
+    });
+  } catch (err) {
+    console.warn('Startup hydration warning:', err.message);
+  }
+  server.listen(PORT, () => {
+    console.log(`JustFun Real-Time Voice & Social Backend running on port ${PORT}`);
+  });
+}
+
+async function gracefulShutdown(signal) {
+  console.log(`Received ${signal}, flushing state before exit...`);
+  try {
+    await firestoreStore.flushDirtyState();
+  } catch (_) {}
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+startServer();
