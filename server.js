@@ -134,7 +134,7 @@ const GREEDY_SLOT_MULTIPLIERS = [5, 5, 5, 5, 10, 15, 25, 45];
 const GREEDY_ALLOWED_CHIPS = new Set([100, 1000, 10000, 50000, 100000, 200000, 500000, 1000000, 5000000]);
 const GREEDY_INITIAL_COINS = 0;
 const GREEDY_MAX_BALANCE = 500000000;
-const GREEDY_MAX_BETS_PER_ROUND = 40;
+const GREEDY_MAX_BETS_PER_ROUND = 400;
 const WALLET_RECHARGE_PACKS = {
   p1: { coins: 800000, priceInr: 100 },
   p2: { coins: 3549000, priceInr: 500 },
@@ -5429,9 +5429,9 @@ wss.on('connection', (ws, req) => {
           break;
         }
 
-        // Anti-spam rate limiting
+        // Anti-spam rate limiting (allows rapid coalesced bet batches without rejecting fast taps)
         const prevBetAt = greedyLastBetAtMs.get(uid) || 0;
-        if (nowMs - prevBetAt < 40) {
+        if (nowMs - prevBetAt < 15) {
           safeSend(ws, {
             type: 'GREEDY_BET_REJECTED',
             reason: 'Too many bets! Slow down.',
@@ -5458,10 +5458,10 @@ wss.on('connection', (ws, req) => {
           break;
         }
 
-        // Validate every slot and chip denomination strictly
+        // Validate every slot and chip denomination strictly (can batch multiple taps on up to 8 slots)
         const incomingBets = msg.betsBySlot || {};
         const entries = Object.entries(incomingBets);
-        if (entries.length === 0 || entries.length > 4) {
+        if (entries.length === 0 || entries.length > 8) {
           safeSend(ws, { type: 'GREEDY_BET_REJECTED', reason: 'Invalid bet slots', serverBalance: curBal });
           break;
         }
@@ -5472,14 +5472,14 @@ wss.on('connection', (ws, req) => {
         for (const [sKey, sAmtRaw] of entries) {
           const sId = Number(sKey);
           const sAmt = Number(sAmtRaw);
-          if (!Number.isInteger(sId) || sId < 0 || sId > 7 || !Number.isInteger(sAmt) || !GREEDY_ALLOWED_CHIPS.has(sAmt)) {
+          if (!Number.isInteger(sId) || sId < 0 || sId > 7 || !Number.isInteger(sAmt) || sAmt < 100 || sAmt > 50000000 || sAmt % 100 !== 0) {
             isInvalid = true;
             break;
           }
           validBets.push([sId, sAmt]);
           totalCost += sAmt;
         }
-        if (isInvalid || validBets.length === 0 || totalCost <= 0 || totalCost > 20000000) {
+        if (isInvalid || validBets.length === 0 || totalCost <= 0 || totalCost > 50000000) {
           safeSend(ws, { type: 'GREEDY_BET_REJECTED', reason: 'Invalid wager amount', serverBalance: curBal });
           break;
         }
