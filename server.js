@@ -84,15 +84,17 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || 'justfun-admin-2026';
 const bannedUserIds = new Map(); // Map<userId, { reason, bannedAtMs }>
 const bannedDeviceKeys = new Map(); // Map<deviceKey, { reason, bannedAtMs }>
 const DYNAMIC_GIFTS_CATALOG = new Map([
-  ['g1', { id: 'g1', name: 'Rose', icon: '🌹', priceCoins: 10, tag: 'HOT', category: 'Popular', animationUrl: '', durationSeconds: 2.5 }],
-  ['g2', { id: 'g2', name: 'Heart', icon: '💖', priceCoins: 50, tag: 'HOT', category: 'Popular', animationUrl: '', durationSeconds: 2.5 }],
-  ['g_rose_3d', { id: 'g_rose_3d', name: 'Red Rose', icon: '🌹', priceCoins: 99, tag: 'HOT', category: 'Popular', animationUrl: '', durationSeconds: 3.0 }],
-  ['g_kiss', { id: 'g_kiss', name: 'Sweet Kiss', icon: '💋', priceCoins: 199, tag: 'HOT', category: 'Popular', animationUrl: '', durationSeconds: 3.0 }],
-  ['g_sports_car', { id: 'g_sports_car', name: 'Sports Car', icon: '🏎️', priceCoins: 5000, tag: 'LUXURY', category: 'Luxury', animationUrl: '', durationSeconds: 4.5 }],
-  ['g_golden_crown', { id: 'g_golden_crown', name: 'Imperial Crown', icon: '👑', priceCoins: 9999, tag: 'VIP', category: 'Privilege', animationUrl: '', durationSeconds: 5.0 }],
-  ['g_private_jet', { id: 'g_private_jet', name: 'Luxury Jet', icon: '🛩️', priceCoins: 29999, tag: 'LUXURY', category: 'Luxury', animationUrl: '', durationSeconds: 6.0 }],
+  ['g1', { id: 'g1', name: 'Rose', icon: '🌹', priceCoins: 10, tag: 'HOT', category: 'Lucky', animationUrl: '', durationSeconds: 2.5, active: true }],
+  ['g2', { id: 'g2', name: 'Love Heart', icon: '💖', priceCoins: 50, tag: 'HOT', category: 'Friend', animationUrl: '', durationSeconds: 2.5, active: true }],
+  ['g_rose_3d', { id: 'g_rose_3d', name: 'Red Rose', icon: '🌹', priceCoins: 99, tag: 'HOT', category: 'Gifts', animationUrl: '', durationSeconds: 6.0, active: true }],
+  ['g_kiss', { id: 'g_kiss', name: 'Sweet Kiss', icon: '💋', priceCoins: 199, tag: 'HOT', category: 'Friend', animationUrl: '', durationSeconds: 3.0, active: true }],
+  ['g_sports_car', { id: 'g_sports_car', name: 'Sports Car', icon: '🏎️', priceCoins: 5000, tag: 'LUXURY', category: 'SVIP', animationUrl: '', durationSeconds: 4.5, active: true }],
+  ['g_golden_crown', { id: 'g_golden_crown', name: 'Imperial Crown', icon: '👑', priceCoins: 9999, tag: 'VIP', category: 'SVIP', animationUrl: '', durationSeconds: 5.0, active: true }],
+  ['g_private_jet', { id: 'g_private_jet', name: 'Luxury Jet', icon: '🛩️', priceCoins: 29999, tag: 'LUXURY', category: 'SVIP', animationUrl: '', durationSeconds: 6.0, active: true }],
 ]);
 const DYNAMIC_MEDALS_CATALOG = new Map();
+let giftsCustomizedByAdmin = false;
+let storeCustomizedByAdmin = false;
 const DYNAMIC_EVENTS_CATALOG = new Map([
   ['ev_anniv', { id: 'ev_anniv', title: '🎆 3rd Anniversary Party', subtitle: "Let's enjoy the 3rd anniversary fireworks show & live party together!", bannerUrl: '', createdAtMs: Date.now() }],
   ['ev_daily', { id: 'ev_daily', title: '🎁 Daily Sign-In & Lucky Box', subtitle: 'Log in every day and chat in rooms to collect free coins!', bannerUrl: '', createdAtMs: Date.now() }],
@@ -205,34 +207,34 @@ const STORE_DURATION_MULT = {
 };
 const STORE_CATALOG = {
   // VEHICLE
-  v_phantom_car: { id: 'v_phantom_car', name: 'Phantom Supercar', category: 'VEHICLE', basePrice7Days: 15000 },
-  v_silver_roadster: { id: 'v_silver_roadster', name: 'Silver Roadster', category: 'VEHICLE', basePrice7Days: 10000 },
-  v_royal_crown_ride: { id: 'v_royal_crown_ride', name: 'Imperial Crown Chariot', category: 'VEHICLE', basePrice7Days: 25000 },
-  v_starlight_cruiser: { id: 'v_starlight_cruiser', name: 'Starlight Cruiser', category: 'VEHICLE', basePrice7Days: 12000 },
-  v_supersonic_jet: { id: 'v_supersonic_jet', name: 'Golden Sky Jet', category: 'VEHICLE', basePrice7Days: 30000 },
-  v_cupid_heart: { id: 'v_cupid_heart', name: 'Lover Heart Float', category: 'VEHICLE', basePrice7Days: 8000 },
+  v_phantom_car: { id: 'v_phantom_car', name: 'Phantom Supercar', subtitle: 'Royal V12 Roar & Golden Drift Entrance', category: 'VEHICLE', basePrice7Days: 15000, rarityStars: 3, hasAnimationPlay: true, active: true },
+  v_silver_roadster: { id: 'v_silver_roadster', name: 'Silver Roadster', subtitle: 'Lightning Speedster Room Entry Effect', category: 'VEHICLE', basePrice7Days: 10000, rarityStars: 2, hasAnimationPlay: true, active: true },
+  v_royal_crown_ride: { id: 'v_royal_crown_ride', name: 'Imperial Crown Chariot', subtitle: "King's Golden Crown Room Entrance", category: 'VEHICLE', basePrice7Days: 25000, rarityStars: 3, hasAnimationPlay: true, active: true },
+  v_starlight_cruiser: { id: 'v_starlight_cruiser', name: 'Starlight Cruiser', subtitle: 'Neon Galaxy Trail Room Entrance', category: 'VEHICLE', basePrice7Days: 12000, rarityStars: 2, hasAnimationPlay: true, active: true },
+  v_supersonic_jet: { id: 'v_supersonic_jet', name: 'Golden Sky Jet', subtitle: 'VIP Supersonic Jet Fly-In Effect', category: 'VEHICLE', basePrice7Days: 30000, rarityStars: 3, hasAnimationPlay: true, active: true },
+  v_cupid_heart: { id: 'v_cupid_heart', name: 'Lover Heart Float', subtitle: 'Romantic Pink Petals Entrance', category: 'VEHICLE', basePrice7Days: 8000, rarityStars: 1, hasAnimationPlay: true, active: true },
   // FRAME
-  f_3rd_anniversary: { id: 'f_3rd_anniversary', name: '3rd Anniversary Frame', category: 'FRAME', basePrice7Days: 12000 },
-  f_charm_crescent: { id: 'f_charm_crescent', name: 'Charm Star Frame', category: 'FRAME', basePrice7Days: 6000 },
-  f_cp_lover: { id: 'f_cp_lover', name: 'CP Lover Lv.1 Frame', category: 'FRAME', basePrice7Days: 9000 },
-  f_ornate_gold: { id: 'f_ornate_gold', name: 'Royal Ornate Gold', category: 'FRAME', basePrice7Days: 18000 },
+  f_3rd_anniversary: { id: 'f_3rd_anniversary', name: '3rd Anniversary Frame', subtitle: 'Exclusive 3-Star Golden Wing & Cake Frame', category: 'FRAME', basePrice7Days: 12000, rarityStars: 3, hasAnimationPlay: false, active: true },
+  f_charm_crescent: { id: 'f_charm_crescent', name: 'Charm Star Frame', subtitle: 'Golden Crescent Moon & Starlight Rim', category: 'FRAME', basePrice7Days: 6000, rarityStars: 1, hasAnimationPlay: false, active: true },
+  f_cp_lover: { id: 'f_cp_lover', name: 'CP Lover Lv.1 Frame', subtitle: 'Rose Gold Couple & Emerald Gem Frame', category: 'FRAME', basePrice7Days: 9000, rarityStars: 2, hasAnimationPlay: false, active: true },
+  f_ornate_gold: { id: 'f_ornate_gold', name: 'Royal Ornate Gold', subtitle: 'Supreme Noble Gold Filigree Frame', category: 'FRAME', basePrice7Days: 18000, rarityStars: 3, hasAnimationPlay: false, active: true },
   // BUBBLE
-  b_purple_panther: { id: 'b_purple_panther', name: 'Purple Panther Bubble', category: 'BUBBLE', basePrice7Days: 8000 },
-  b_starlight_galaxy: { id: 'b_starlight_galaxy', name: 'Starlight Galaxy Bubble', category: 'BUBBLE', basePrice7Days: 5000 },
-  b_golden_combo: { id: 'b_golden_combo', name: 'Imperial Gold Bubble', category: 'BUBBLE', basePrice7Days: 10000 },
-  b_cp_romance: { id: 'b_cp_romance', name: 'CP Sweetheart Bubble', category: 'BUBBLE', basePrice7Days: 6500 },
+  b_purple_panther: { id: 'b_purple_panther', name: 'Purple Panther Bubble', subtitle: 'Fierce Neon Panther Room & Chat Frame', category: 'BUBBLE', basePrice7Days: 8000, rarityStars: 3, hasAnimationPlay: false, sampleBubbleText: 'Welcome to Just Fun Room! 🎤', active: true },
+  b_starlight_galaxy: { id: 'b_starlight_galaxy', name: 'Starlight Galaxy Bubble', subtitle: 'Dreamy Purple Starry Sky Chat Box', category: 'BUBBLE', basePrice7Days: 5000, rarityStars: 2, hasAnimationPlay: false, sampleBubbleText: 'Hello friends! Join the mic 🎤✨', active: true },
+  b_golden_combo: { id: 'b_golden_combo', name: 'Imperial Gold Bubble', subtitle: 'Golden Rich Supporter Chat Highlight', category: 'BUBBLE', basePrice7Days: 10000, rarityStars: 3, hasAnimationPlay: false, sampleBubbleText: 'VIP Boss is in the house 👑🔥', active: true },
+  b_cp_romance: { id: 'b_cp_romance', name: 'CP Sweetheart Bubble', subtitle: 'Pink & Gold Couple Chat Style', category: 'BUBBLE', basePrice7Days: 6500, rarityStars: 2, hasAnimationPlay: false, sampleBubbleText: 'Best Friends Forever ❤️✨', active: true },
   // MIC_WAVE
-  w_emerald_pulse: { id: 'w_emerald_pulse', name: 'Emerald Neon Wave', category: 'MIC_WAVE', basePrice7Days: 6000 },
-  w_golden_crown_wave: { id: 'w_golden_crown_wave', name: 'Royal Gold Wave', category: 'MIC_WAVE', basePrice7Days: 12000 },
-  w_cyber_violet_wave: { id: 'w_cyber_violet_wave', name: 'Cyber Violet Wave', category: 'MIC_WAVE', basePrice7Days: 8500 },
-  w_rose_lover_wave: { id: 'w_rose_lover_wave', name: 'Romantic Rose Wave', category: 'MIC_WAVE', basePrice7Days: 7500 },
+  w_emerald_pulse: { id: 'w_emerald_pulse', name: 'Emerald Neon Wave', subtitle: 'Glowing Mint-Emerald Sound Rings on Mic', category: 'MIC_WAVE', basePrice7Days: 6000, rarityStars: 2, hasAnimationPlay: true, micWaveColorHex: 0xFF19CC9D, active: true },
+  w_golden_crown_wave: { id: 'w_golden_crown_wave', name: 'Royal Gold Wave', subtitle: 'Imperial Golden Sound Pulse on Room Seat', category: 'MIC_WAVE', basePrice7Days: 12000, rarityStars: 3, hasAnimationPlay: true, micWaveColorHex: 0xFFFFB300, active: true },
+  w_cyber_violet_wave: { id: 'w_cyber_violet_wave', name: 'Cyber Violet Wave', subtitle: 'Electric Purple DJ Sound Rings on Mic', category: 'MIC_WAVE', basePrice7Days: 8500, rarityStars: 2, hasAnimationPlay: true, micWaveColorHex: 0xFFAA00FF, active: true },
+  w_rose_lover_wave: { id: 'w_rose_lover_wave', name: 'Romantic Rose Wave', subtitle: 'Sweet Pink Heartbeat Mic Aura', category: 'MIC_WAVE', basePrice7Days: 7500, rarityStars: 2, hasAnimationPlay: true, micWaveColorHex: 0xFFFF4081, active: true },
   // SPECIAL_ID
-  sid_888888: { id: 'sid_888888', name: 'SID: 888888', category: 'SPECIAL_ID', basePrice7Days: 50000, specialIdNumber: '888888' },
-  sid_999999: { id: 'sid_999999', name: 'SID: 999999', category: 'SPECIAL_ID', basePrice7Days: 50000, specialIdNumber: '999999' },
-  sid_777777: { id: 'sid_777777', name: 'SID: 777777', category: 'SPECIAL_ID', basePrice7Days: 35000, specialIdNumber: '777777' },
-  sid_5201314: { id: 'sid_5201314', name: 'ID: 5201314', category: 'SPECIAL_ID', basePrice7Days: 20000, specialIdNumber: '5201314' },
-  sid_100001: { id: 'sid_100001', name: 'ID: 100001', category: 'SPECIAL_ID', basePrice7Days: 15000, specialIdNumber: '100001' },
-  sid_112233: { id: 'sid_112233', name: 'ID: 112233', category: 'SPECIAL_ID', basePrice7Days: 10000, specialIdNumber: '112233' },
+  sid_888888: { id: 'sid_888888', name: 'SID: 888888', subtitle: 'Supreme Six-8s Wealth VIP ID Badge', category: 'SPECIAL_ID', basePrice7Days: 50000, rarityStars: 3, hasAnimationPlay: false, specialIdNumber: '888888', active: true },
+  sid_999999: { id: 'sid_999999', name: 'SID: 999999', subtitle: 'Emperor 999999 Eternal Honour ID', category: 'SPECIAL_ID', basePrice7Days: 50000, rarityStars: 3, hasAnimationPlay: false, specialIdNumber: '999999', active: true },
+  sid_777777: { id: 'sid_777777', name: 'SID: 777777', subtitle: 'Lucky Jackpot 777777 Golden ID', category: 'SPECIAL_ID', basePrice7Days: 35000, rarityStars: 3, hasAnimationPlay: false, specialIdNumber: '777777', active: true },
+  sid_5201314: { id: 'sid_5201314', name: 'ID: 5201314', subtitle: 'Forever Love Special Charm ID', category: 'SPECIAL_ID', basePrice7Days: 20000, rarityStars: 2, hasAnimationPlay: false, specialIdNumber: '5201314', active: true },
+  sid_100001: { id: 'sid_100001', name: 'ID: 100001', subtitle: 'No.1 Top Host Pioneer Charm ID', category: 'SPECIAL_ID', basePrice7Days: 15000, rarityStars: 2, hasAnimationPlay: false, specialIdNumber: '100001', active: true },
+  sid_112233: { id: 'sid_112233', name: 'ID: 112233', subtitle: 'Double Step Lucky Number ID', category: 'SPECIAL_ID', basePrice7Days: 10000, rarityStars: 1, hasAnimationPlay: false, specialIdNumber: '112233', active: true },
 };
 const userStoreInventories = new Map(); // Map<userId, { items: Map<itemId, ...>, equipped: { VEHICLE, FRAME, BUBBLE, MIC_WAVE, SPECIAL_ID } }>
 const storeProcessedOrderIds = new Map(); // Map<orderId, number>
@@ -2592,6 +2594,7 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
           <div class="form-grid">
             <input id="stItemId" placeholder="Item ID (e.g. f_royal_king)" />
             <input id="stItemName" placeholder="Item Name (e.g. Royal King Frame)" />
+            <input id="stItemSub" placeholder="Subtitle / Effect Note" />
             <select id="stItemCat">
               <option value="FRAME">FRAME (Avatar Frame)</option>
               <option value="VEHICLE">VEHICLE (Entry Car)</option>
@@ -2600,7 +2603,12 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
               <option value="SPECIAL_ID">SPECIAL_ID (VIP ID)</option>
             </select>
             <input id="stItemPrice" type="number" placeholder="7-Day Base Price (Coins)" value="12000" />
-            <input id="stItemIconUrl" placeholder="Custom Image/GIF URL (Optional)" />
+            <select id="stItemStars">
+              <option value="1">1 Star ★</option>
+              <option value="2">2 Stars ★★</option>
+              <option value="3" selected>3 Stars ★★★</option>
+            </select>
+            <input id="stItemIconUrl" placeholder="Custom Image/GIF URL (https://...)" />
             <input id="stSpecialIdNum" placeholder="Special ID Number (if SPECIAL_ID)" />
             <button onclick="saveStoreCatalogItem()">💾 Save Store Item</button>
           </div>
@@ -2621,21 +2629,27 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
           <div class="form-grid">
             <input id="medUserId" placeholder="8-Digit User ID" />
             <input id="medLevel" type="number" placeholder="New Level (e.g. 25, leave blank to skip)" />
-            <input id="medIdToGrant" placeholder="Medal ID (e.g. wealth_1, charm_1, noble_king)" />
+            <input id="medIdToGrant" placeholder="Medal ID (e.g. ach_greedy_king, m_superstar)" />
             <button onclick="updateUserMedalAndLevel()">⚡ Update Level / Unlock Medal</button>
           </div>
         </div>
 
         <div class="card">
-          <h3>🎖️ Add Custom Dynamic Medal</h3>
+          <h3>🎖️ Add or Update Dynamic Medal (Real-Time Firestore Sync)</h3>
           <div class="form-grid">
             <input id="newMedalId" placeholder="Medal ID (e.g. m_superstar)" />
             <input id="newMedalName" placeholder="Medal Title (e.g. Superstar Host)" />
+            <select id="newMedalCat">
+              <option value="ACHIEVEMENT">ACHIEVEMENT</option>
+              <option value="GIFT">GIFT</option>
+              <option value="ACTIVITY">ACTIVITY</option>
+            </select>
+            <input id="newMedalStars" type="number" min="1" max="4" value="3" placeholder="Stars (1-4)" />
             <input id="newMedalDesc" placeholder="Description" value="Awarded by Official Admin" />
             <input id="newMedalIconUrl" placeholder="Medal Icon URL (https://...)" />
-            <button onclick="saveCustomMedal()">➕ Add / Update Medal</button>
+            <button onclick="saveCustomMedal()">➕ Save / Update Medal</button>
           </div>
-          <div id="customMedalsPreview" style="color:var(--muted); font-size:13px;"></div>
+          <div id="customMedalsPreview" style="color:var(--muted); font-size:13px; margin-top:8px;"></div>
         </div>
       </section>
 
@@ -2798,6 +2812,7 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
           .map(([k, v]) => '<b>' + k + '</b>: ' + Number(v.coins).toLocaleString() + ' Coins (₹' + v.priceInr + ')')
           .join(' &nbsp;|&nbsp; ');
 
+        window._cachedCatalogData = { gifts: d.gifts || [], storeCatalog: d.storeCatalog || [], customMedals: d.customMedals || [] };
         const gBody = document.getElementById('giftsTableBody');
         gBody.innerHTML = d.gifts.map(g => '<tr>' +
           '<td><b>' + g.id + '</b></td>' +
@@ -2806,7 +2821,10 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
           '<td>' + g.category + ' <span class="badge ok">' + (g.tag || 'HOT') + '</span></td>' +
           '<td>🪙 ' + Number(g.priceCoins).toLocaleString() + '</td>' +
           '<td style="font-size:11px; color:var(--muted); max-width:200px; overflow:hidden; text-overflow:ellipsis;">' + (g.animationUrl || 'Built-in') + '</td>' +
-          '<td><button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteGift(\\'' + g.id + '\\')">Delete</button></td>' +
+          '<td>' +
+            '<button class="secondary" style="padding:5px 9px; font-size:11px; margin-right:4px;" onclick="editGift(\\'' + g.id + '\\')">Edit</button>' +
+            '<button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteGift(\\'' + g.id + '\\')">Delete</button>' +
+          '</td>' +
         '</tr>').join('');
 
         const grantSel = document.getElementById('grantItemId');
@@ -2816,12 +2834,15 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
           '<td>' + item.name + '</td>' +
           '<td><span class="badge ok">' + item.category + '</span></td>' +
           '<td>🪙 ' + Number(item.basePrice7Days).toLocaleString() + '</td>' +
-          '<td style="font-size:11px; color:var(--muted);">' + (item.iconUrl || 'Built-in') + '</td>' +
-          '<td><button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteStoreItem(\\'' + item.id + '\\')">Remove</button></td>' +
+          '<td style="font-size:11px; color:var(--muted);">' + (item.iconUrl ? '<img src="' + item.iconUrl + '" style="width:24px;height:24px;border-radius:4px;vertical-align:middle;margin-right:4px;object-fit:cover;"/>URL' : 'Built-in') + '</td>' +
+          '<td>' +
+            '<button class="secondary" style="padding:5px 9px; font-size:11px; margin-right:4px;" onclick="editStoreItem(\\'' + item.id + '\\')">Edit</button>' +
+            '<button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteStoreItem(\\'' + item.id + '\\')">Remove</button>' +
+          '</td>' +
         '</tr>').join('');
 
         document.getElementById('customMedalsPreview').innerHTML = (d.customMedals || [])
-          .map(m => '<span class="badge ok" style="margin-right:6px;">🏅 ' + m.id + ': ' + m.name + '</span>').join('') || 'No custom medals added yet.';
+          .map(m => '<span class="badge ok" style="margin:4px 6px 4px 0; display:inline-flex; align-items:center; gap:6px;">🏅 ' + m.id + ': ' + m.name + ' (' + (m.category || 'ACHIEVEMENT') + ') <a href="#" style="color:#ff8a80; text-decoration:none; font-weight:800;" onclick="deleteCustomMedal(\\'' + m.id + '\\');return false;">✕</a></span>').join('') || 'No custom medals added yet.';
 
         document.getElementById('eventsTableBody').innerHTML = (d.events || []).map(ev => '<tr>' +
           '<td>' + ev.id + '</td>' +
@@ -2921,6 +2942,19 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
       } catch (e) { showToast(e.message, true); }
     }
 
+    function editGift(id) {
+      const g = (window._cachedCatalogData?.gifts || []).find(x => x.id === id);
+      if (!g) return;
+      document.getElementById('giftId').value = g.id || '';
+      document.getElementById('giftName').value = g.name || '';
+      document.getElementById('giftPrice').value = g.priceCoins || 10;
+      document.getElementById('giftCategory').value = g.category || 'Popular';
+      document.getElementById('giftTag').value = g.tag || 'HOT';
+      document.getElementById('giftIcon').value = g.icon || '🎁';
+      document.getElementById('giftAnimUrl').value = g.animationUrl || '';
+      document.getElementById('giftDuration').value = g.durationSeconds || 3.0;
+    }
+
     async function saveGift() {
       try {
         const body = {
@@ -2931,10 +2965,11 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
           tag: document.getElementById('giftTag').value.trim() || 'HOT',
           icon: document.getElementById('giftIcon').value.trim() || '🎁',
           animationUrl: document.getElementById('giftAnimUrl').value.trim(),
-          durationSeconds: Number(document.getElementById('giftDuration').value || 3.0)
+          durationSeconds: Number(document.getElementById('giftDuration').value || 3.0),
+          active: true
         };
         await api('/api/admin/gifts', 'POST', body);
-        showToast('Gift "' + body.name + '" saved & pushed to all users!');
+        showToast('Gift "' + body.name + '" saved & synced to Firestore!');
         loadAll();
       } catch (e) { showToast(e.message, true); }
     }
@@ -2958,18 +2993,34 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
       } catch (e) { showToast(e.message, true); }
     }
 
+    function editStoreItem(id) {
+      const item = (window._cachedCatalogData?.storeCatalog || []).find(x => x.id === id);
+      if (!item) return;
+      document.getElementById('stItemId').value = item.id || '';
+      document.getElementById('stItemName').value = item.name || '';
+      document.getElementById('stItemSub').value = item.subtitle || '';
+      document.getElementById('stItemCat').value = item.category || 'FRAME';
+      document.getElementById('stItemPrice').value = item.basePrice7Days || 10000;
+      document.getElementById('stItemStars').value = String(item.rarityStars || 2);
+      document.getElementById('stItemIconUrl').value = item.iconUrl || '';
+      document.getElementById('stSpecialIdNum').value = item.specialIdNumber || '';
+    }
+
     async function saveStoreCatalogItem() {
       try {
         const body = {
           id: document.getElementById('stItemId').value.trim(),
           name: document.getElementById('stItemName').value.trim(),
+          subtitle: document.getElementById('stItemSub').value.trim(),
           category: document.getElementById('stItemCat').value,
           basePrice7Days: Number(document.getElementById('stItemPrice').value || 10000),
+          rarityStars: Number(document.getElementById('stItemStars').value || 2),
           iconUrl: document.getElementById('stItemIconUrl').value.trim(),
-          specialIdNumber: document.getElementById('stSpecialIdNum').value.trim()
+          specialIdNumber: document.getElementById('stSpecialIdNum').value.trim(),
+          active: true
         };
         await api('/api/admin/store/catalog', 'POST', body);
-        showToast('Store item "' + body.name + '" saved & synced!');
+        showToast('Store item "' + body.name + '" saved & synced to Firestore!');
         loadAll();
       } catch (e) { showToast(e.message, true); }
     }
@@ -3002,11 +3053,22 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
         const body = {
           id: document.getElementById('newMedalId').value.trim(),
           name: document.getElementById('newMedalName').value.trim(),
+          category: document.getElementById('newMedalCat').value,
+          starCount: Number(document.getElementById('newMedalStars').value || 3),
           description: document.getElementById('newMedalDesc').value.trim(),
-          iconUrl: document.getElementById('newMedalIconUrl').value.trim()
+          iconUrl: document.getElementById('newMedalIconUrl').value.trim(),
+          active: true
         };
         await api('/api/admin/medals', 'POST', body);
-        showToast('Medal "' + body.name + '" added & synced!');
+        showToast('Medal "' + body.name + '" saved & synced to Firestore!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteCustomMedal(id) {
+      try {
+        await api('/api/admin/medals/' + encodeURIComponent(id), 'DELETE');
+        showToast('Medal ' + id + ' deleted!');
         loadAll();
       } catch (e) { showToast(e.message, true); }
     }
@@ -3279,9 +3341,11 @@ app.post('/api/admin/gifts', requireAdminAuth, (req, res) => {
   const icon = String(req.body.icon || '🎁').trim();
   const animationUrl = String(req.body.animationUrl || '').trim();
   const durationSeconds = Math.max(1, Number(req.body.durationSeconds || 3.0));
+  const active = req.body.active !== false;
   if (!name) return res.status(400).json({ error: 'Gift name is required' });
-  const gift = { id, name, icon, priceCoins, tag, category, animationUrl, durationSeconds };
+  const gift = { id, name, icon, priceCoins, tag, category, animationUrl, durationSeconds, active };
   DYNAMIC_GIFTS_CATALOG.set(id, gift);
+  giftsCustomizedByAdmin = true;
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
   res.json({ ok: true, gift });
@@ -3290,6 +3354,7 @@ app.post('/api/admin/gifts', requireAdminAuth, (req, res) => {
 app.delete('/api/admin/gifts/:id', requireAdminAuth, (req, res) => {
   const id = String(req.params.id || '').trim();
   DYNAMIC_GIFTS_CATALOG.delete(id);
+  giftsCustomizedByAdmin = true;
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
   res.json({ ok: true, deletedId: id });
@@ -3298,12 +3363,36 @@ app.delete('/api/admin/gifts/:id', requireAdminAuth, (req, res) => {
 app.post('/api/admin/store/catalog', requireAdminAuth, (req, res) => {
   const id = String(req.body.id || `st_${Date.now()}`).trim();
   const name = String(req.body.name || '').trim();
-  const category = String(req.body.category || 'FRAME').trim();
-  const basePrice7Days = Math.max(100, Math.floor(Number(req.body.basePrice7Days || 10000)));
-  const iconUrl = String(req.body.iconUrl || '').trim();
-  const specialIdNumber = String(req.body.specialIdNumber || '').trim();
+  const prev = STORE_CATALOG[id] || {};
+  const subtitle = String(req.body.subtitle || prev.subtitle || 'Exclusive Store Item').trim();
+  const category = String(req.body.category || prev.category || 'FRAME').trim().toUpperCase();
+  const basePrice7Days = Math.max(100, Math.floor(Number(req.body.basePrice7Days || prev.basePrice7Days || 10000)));
+  const rarityStars = Math.max(1, Math.min(3, Math.floor(Number(req.body.rarityStars || prev.rarityStars || 2))));
+  const hasAnimationPlay = req.body.hasAnimationPlay !== undefined
+    ? Boolean(req.body.hasAnimationPlay)
+    : (category === 'VEHICLE' || category === 'MIC_WAVE' || Boolean(prev.hasAnimationPlay));
+  const iconUrl = req.body.iconUrl !== undefined ? String(req.body.iconUrl || '').trim() : (prev.iconUrl || '');
+  const animationUrl = req.body.animationUrl !== undefined ? String(req.body.animationUrl || '').trim() : (prev.animationUrl || '');
+  const specialIdNumber = req.body.specialIdNumber !== undefined ? String(req.body.specialIdNumber || '').trim() : (prev.specialIdNumber || '');
+  const sampleBubbleText = req.body.sampleBubbleText !== undefined ? String(req.body.sampleBubbleText || '').trim() : (prev.sampleBubbleText || 'Welcome to Just Fun Voice Party! 🎤');
+  const active = req.body.active !== false;
   if (!name) return res.status(400).json({ error: 'Item name is required' });
-  STORE_CATALOG[id] = { id, name, category, basePrice7Days, iconUrl, specialIdNumber };
+  STORE_CATALOG[id] = {
+    ...prev,
+    id,
+    name,
+    subtitle,
+    category,
+    basePrice7Days,
+    rarityStars,
+    hasAnimationPlay,
+    iconUrl,
+    animationUrl,
+    specialIdNumber,
+    sampleBubbleText,
+    active,
+  };
+  storeCustomizedByAdmin = true;
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
   res.json({ ok: true, item: STORE_CATALOG[id] });
@@ -3312,6 +3401,7 @@ app.post('/api/admin/store/catalog', requireAdminAuth, (req, res) => {
 app.delete('/api/admin/store/catalog/:id', requireAdminAuth, (req, res) => {
   const id = String(req.params.id || '').trim();
   delete STORE_CATALOG[id];
+  storeCustomizedByAdmin = true;
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
   res.json({ ok: true, deletedId: id });
@@ -3376,14 +3466,27 @@ app.post('/api/admin/users/medal-level', requireAdminAuth, (req, res) => {
 app.post('/api/admin/medals', requireAdminAuth, (req, res) => {
   const id = String(req.body.id || `m_${Date.now()}`).trim();
   const name = String(req.body.name || '').trim();
+  const category = String(req.body.category || 'ACHIEVEMENT').trim().toUpperCase();
+  const starCount = Math.max(1, Math.min(4, Math.floor(Number(req.body.starCount || 3))));
   const description = String(req.body.description || 'Official Medal').trim();
+  const unlockCondition = String(req.body.unlockCondition || 'Granted by Official Admin').trim();
   const iconUrl = String(req.body.iconUrl || '').trim();
+  const targetProgress = Math.max(1, Math.floor(Number(req.body.targetProgress || 1)));
+  const active = req.body.active !== false;
   if (!name) return res.status(400).json({ error: 'Medal name required' });
-  const medal = { id, name, description, iconUrl };
+  const medal = { id, name, category, starCount, description, unlockCondition, iconUrl, targetProgress, active };
   DYNAMIC_MEDALS_CATALOG.set(id, medal);
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
   res.json({ ok: true, medal });
+});
+
+app.delete('/api/admin/medals/:id', requireAdminAuth, (req, res) => {
+  const id = String(req.params.id || '').trim();
+  DYNAMIC_MEDALS_CATALOG.delete(id);
+  broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
+  res.json({ ok: true, deletedId: id });
 });
 
 app.post('/api/admin/broadcast', requireAdminAuth, (req, res) => {
@@ -3528,8 +3631,9 @@ wss.on('connection', (ws, req) => {
   clientMeta.set(ws, meta);
   homeSubscribers.add(ws);
 
-  // Immediately push live rooms list + authoritative server clock on connect
+  // Immediately push live rooms list + authoritative dynamic catalogs on connect
   safeSend(ws, { type: 'LIVE_ROOMS_UPDATE', serverNowMs: Date.now(), rooms: getLiveRoomsSummary() });
+  safeSend(ws, buildDynamicCatalogPayload());
 
   ws.on('pong', () => {
     meta.missedPings = 0;
@@ -5202,8 +5306,8 @@ wss.on('connection', (ws, req) => {
         const orderId = String(msg.clientOrderId || '').trim();
         const itemSpec = STORE_CATALOG[itemId];
         const durationMult = STORE_DURATION_MULT[durationDays];
-        if (!itemSpec || !durationMult) {
-          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: 'Invalid store item or duration.' });
+        if (!itemSpec || itemSpec.active === false || !durationMult) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: 'Store item is unavailable or discontinued.' });
           break;
         }
         if (!orderId || orderId.length < 8) {
@@ -5341,8 +5445,8 @@ wss.on('connection', (ws, req) => {
           safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'You cannot send a Store gift to yourself. Use Buy instead.' });
           break;
         }
-        if (!itemSpec || !durationMult) {
-          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'Invalid store item or duration.' });
+        if (!itemSpec || itemSpec.active === false || !durationMult) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'GIFT', success: false, error: 'Store item is unavailable or discontinued.' });
           break;
         }
         if (!orderId || orderId.length < 8) {
@@ -6053,9 +6157,12 @@ firestoreStore.bindStateRefs({
   bannedDeviceKeys,
   dmThreads,
   DYNAMIC_GIFTS_CATALOG,
+  STORE_CATALOG,
   DYNAMIC_MEDALS_CATALOG,
   DYNAMIC_EVENTS_CATALOG,
   bannedUserIds,
+  getGiftsCustomizedByAdmin: () => giftsCustomizedByAdmin,
+  getStoreCustomizedByAdmin: () => storeCustomizedByAdmin,
   getGreedyDayIndex: () => greedyDayIndex,
   getGreedyTodayLeaderboard: () => greedyTodayLeaderboard,
   getGreedyYesterdayLeaderboard: () => greedyYesterdayLeaderboard,
@@ -6085,12 +6192,28 @@ firestoreStore.bindStateRefs({
       });
     }
     ensureGreedyDayFresh();
+    if (typeof doc.giftsCustomizedByAdmin === 'boolean') {
+      giftsCustomizedByAdmin = doc.giftsCustomizedByAdmin;
+    }
     if (Array.isArray(doc.dynamicGifts)) {
+      if (giftsCustomizedByAdmin) DYNAMIC_GIFTS_CATALOG.clear();
       doc.dynamicGifts.forEach((g) => {
         if (g && g.id) DYNAMIC_GIFTS_CATALOG.set(g.id, g);
       });
     }
+    if (typeof doc.storeCustomizedByAdmin === 'boolean') {
+      storeCustomizedByAdmin = doc.storeCustomizedByAdmin;
+    }
+    if (Array.isArray(doc.storeCatalog)) {
+      if (storeCustomizedByAdmin) {
+        Object.keys(STORE_CATALOG).forEach((k) => delete STORE_CATALOG[k]);
+      }
+      doc.storeCatalog.forEach((item) => {
+        if (item && item.id) STORE_CATALOG[item.id] = item;
+      });
+    }
     if (Array.isArray(doc.dynamicMedals)) {
+      DYNAMIC_MEDALS_CATALOG.clear();
       doc.dynamicMedals.forEach((m) => {
         if (m && m.id) DYNAMIC_MEDALS_CATALOG.set(m.id, m);
       });
