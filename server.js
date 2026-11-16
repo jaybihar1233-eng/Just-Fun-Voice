@@ -186,17 +186,14 @@ const reports = [];
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'justfun-admin-2026';
 const bannedUserIds = new Map(); // Map<userId, { reason, bannedAtMs }>
 const bannedDeviceKeys = new Map(); // Map<deviceKey, { reason, bannedAtMs }>
-const DYNAMIC_GIFTS_CATALOG = new Map([
-  ['g1', { id: 'g1', name: 'Rose', icon: '🌹', priceCoins: 10, tag: 'HOT', category: 'Lucky', animationUrl: '', durationSeconds: 2.5, active: true }],
-  ['g2', { id: 'g2', name: 'Love Heart', icon: '💖', priceCoins: 50, tag: 'HOT', category: 'Friend', animationUrl: '', durationSeconds: 2.5, active: true }],
-  ['g_rose_3d', { id: 'g_rose_3d', name: 'Red Rose', icon: '🌹', priceCoins: 99, tag: 'HOT', category: 'Gifts', animationUrl: '', durationSeconds: 6.0, active: true }],
-  ['g_kiss', { id: 'g_kiss', name: 'Sweet Kiss', icon: '💋', priceCoins: 199, tag: 'HOT', category: 'Friend', animationUrl: '', durationSeconds: 3.0, active: true }],
-  ['g_sports_car', { id: 'g_sports_car', name: 'Sports Car', icon: '🏎️', priceCoins: 5000, tag: 'LUXURY', category: 'SVIP', animationUrl: '', durationSeconds: 4.5, active: true }],
-  ['g_golden_crown', { id: 'g_golden_crown', name: 'Imperial Crown', icon: '👑', priceCoins: 9999, tag: 'VIP', category: 'SVIP', animationUrl: '', durationSeconds: 5.0, active: true }],
-  ['g_private_jet', { id: 'g_private_jet', name: 'Luxury Jet', icon: '🛩️', priceCoins: 29999, tag: 'LUXURY', category: 'SVIP', animationUrl: '', durationSeconds: 6.0, active: true }],
+const LEGACY_BUILTIN_GIFT_IDS = new Set([
+  'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'g7', 'g8', 'g9',
+  'g_rose_3d', 'g_kiss', 'g_sports_car', 'g_golden_crown', 'g_private_jet',
+  'g_vip_halo', 'g_cyber_light', 'g_neon_galaxy', 'g_vip_fly',
 ]);
+const DYNAMIC_GIFTS_CATALOG = new Map();
 const DYNAMIC_MEDALS_CATALOG = new Map();
-let giftsCustomizedByAdmin = false;
+let giftsCustomizedByAdmin = true;
 let storeCustomizedByAdmin = false;
 const DYNAMIC_EVENTS_CATALOG = new Map([
   ['ev_anniv', { id: 'ev_anniv', title: '🎆 3rd Anniversary Party', subtitle: "Let's enjoy the 3rd anniversary fireworks show & live party together!", bannerUrl: '', createdAtMs: Date.now() }],
@@ -6614,9 +6611,13 @@ firestoreStore.bindStateRefs({
       giftsCustomizedByAdmin = doc.giftsCustomizedByAdmin;
     }
     if (Array.isArray(doc.dynamicGifts)) {
-      if (giftsCustomizedByAdmin) DYNAMIC_GIFTS_CATALOG.clear();
+      DYNAMIC_GIFTS_CATALOG.clear();
       doc.dynamicGifts.forEach((g) => {
-        if (g && g.id) DYNAMIC_GIFTS_CATALOG.set(g.id, g);
+        if (!g || !g.id) return;
+        const isLegacyBuiltIn = LEGACY_BUILTIN_GIFT_IDS.has(String(g.id)) && !String(g.animationUrl || '').trim();
+        if (!isLegacyBuiltIn) {
+          DYNAMIC_GIFTS_CATALOG.set(g.id, g);
+        }
       });
     }
     if (typeof doc.storeCustomizedByAdmin === 'boolean') {
