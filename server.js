@@ -4064,12 +4064,35 @@ wss.on('connection', (ws, req) => {
 
       case 'SEND_GIFT_TX': {
         const fromUserId = String(msg.fromUserId || meta.userId || '');
-        const targetUserId = String(msg.targetUserId || '');
-        const roomId = String(msg.roomId || '');
+        const singleTarget = String(msg.targetUserId || '');
+        const targetListRaw = Array.isArray(msg.targetUserIds)
+          ? msg.targetUserIds.map((id) => String(id || '').trim()).filter(Boolean)
+          : [];
+        const uniqueTargets = Array.from(new Set(
+          targetListRaw.length > 0 ? targetListRaw : (singleTarget ? [singleTarget] : [])
+        ));
+        const roomId = String(msg.roomId || meta.roomId || '');
         const charmDelta = Math.max(0, Math.floor(Number(msg.charmDelta || 0)));
         const coinsSpent = Math.max(0, Math.floor(Number(msg.coinsSpent || charmDelta)));
+        const txId = String(msg.txId || '').trim();
         if (!fromUserId || coinsSpent <= 0) break;
         if (meta.userId && fromUserId !== meta.userId) break;
+        if (!meta.userId) meta.userId = fromUserId;
+        addUserSocket(fromUserId, ws);
+
+        pruneWalletTxCache();
+        if (txId && walletProcessedTxIds.has(txId)) {
+          // Idempotent duplicate after reconnect: just re-sync wallet & rocket state cleanly
+          pushWalletSyncToUser(fromUserId);
+          if (roomId && rooms.has(roomId)) {
+            safeSend(ws, {
+              type: 'ROCKET_STATE_UPDATE',
+              ackedTxId: txId,
+              rocketState: buildRocketStatePayload(rooms.get(roomId)),
+            });
+          }
+          break;
+        }
 
         // Authoritative balance check / pre-paid spend tx linkage (prevents free gifts & double deduction)
         const prePaidTxId = msg.prePaidTxId ? String(msg.prePaidTxId) : '';
@@ -4092,22 +4115,47 @@ wss.on('connection', (ws, req) => {
               error: 'Insufficient Coins balance for gift!',
             });
             pushWalletSyncToUser(fromUserId);
+            if (roomId && rooms.has(roomId)) {
+              safeSend(ws, {
+                type: 'ROCKET_STATE_UPDATE',
+                ackedTxId: txId,
+                rocketState: buildRocketStatePayload(rooms.get(roomId)),
+              });
+            }
             break;
           }
           greedyUserBalances.set(fromUserId, senderBal - coinsSpent);
           recordWalletTx(
             fromUserId,
             'COIN_USAGE',
-            `Gift: ${msg.giftName || 'Gift'} x${Number(msg.giftCount || 1)}`,
+            `Gift: ${msg.giftName || 'Gift'} x${Number(msg.giftCount || 1)}${uniqueTargets.length > 1 ? ` (${uniqueTargets.length} mics)` : ''}`,
             `-${coinsSpent.toLocaleString('en-US')} Coins`,
-            false
+            false,
+            txId || null
           );
           pushWalletSyncToUser(fromUserId);
         }
 
-        if (targetUserId && charmDelta > 0) {
-          const existing = users.get(targetUserId) || { userId: targetUserId, user8DigitId: targetUserId };
-          existing.totalCharmPoints = Number(existing.totalCharmPoints || 0) + charmDelta;
+        if (txId) {
+          walletProcessedTxIds.set(txId, {
+            userId: fromUserId,
+            amount: coinsSpent,
+            remainingGiftCoins: 0,
+            createdAtMs: Date.now(),
+          });
+        }
+
+        const perTargetCoins = uniqueTargets.length > 0
+          ? Math.max(1, Math.floor(coinsSpent / uniqueTargets.length))
+          : coinsSpent;
+        const perTargetCharm = uniqueTargets.length === 1 && charmDelta > 0
+          ? charmDelta
+          : perTargetCoins;
+
+        for (const tUid of uniqueTargets) {
+          if (!tUid || perTargetCharm <= 0) continue;
+          const existing = users.get(tUid) || { userId: tUid, user8DigitId: tUid };
+          existing.totalCharmPoints = Number(existing.totalCharmPoints || 0) + perTargetCharm;
           if (msg.giftName) {
             const gifts = Array.isArray(existing.receivedGifts) ? [...existing.receivedGifts] : [];
             const gIdx = gifts.findIndex((g) => g.name === msg.giftName);
@@ -4116,7 +4164,7 @@ wss.on('connection', (ws, req) => {
               gifts[gIdx] = {
                 ...gifts[gIdx],
                 count: Number(gifts[gIdx].count || 0) + gCount,
-                charmValue: Number(gifts[gIdx].charmValue || 0) + charmDelta,
+                charmValue: Number(gifts[gIdx].charmValue || 0) + perTargetCharm,
               };
             } else {
               gifts.push({
@@ -4124,35 +4172,37 @@ wss.on('connection', (ws, req) => {
                 name: msg.giftName,
                 icon: msg.giftIcon || '🎁',
                 count: gCount,
-                charmValue: charmDelta,
+                charmValue: perTargetCharm,
               });
             }
             existing.receivedGifts = gifts.slice(0, 30);
           }
-          users.set(targetUserId, existing);
-          pushSocialSyncToUser(targetUserId);
+          users.set(tUid, existing);
+          pushSocialSyncToUser(tUid);
 
           // Credit authoritative Diamonds to receiver (1 Coin gift = 1 Diamond, exchange = 33%)
-          if (targetUserId !== fromUserId && coinsSpent > 0) {
-            const curDiamonds = getOrInitDiamondsBalance(targetUserId);
-            userDiamonds.set(targetUserId, curDiamonds + coinsSpent);
+          if (tUid !== fromUserId && perTargetCoins > 0) {
+            const curDiamonds = getOrInitDiamondsBalance(tUid);
+            userDiamonds.set(tUid, curDiamonds + perTargetCoins);
             recordWalletTx(
-              targetUserId,
+              tUid,
               'DIAMOND_INCOME',
               `Gift Income: ${msg.giftName || 'Gift'} x${Number(msg.giftCount || 1)}`,
-              `+${coinsSpent.toLocaleString('en-US')} Diamonds`,
+              `+${perTargetCoins.toLocaleString('en-US')} Diamonds`,
               true
             );
-            pushWalletSyncToUser(targetUserId);
+            pushWalletSyncToUser(tUid);
           }
         }
+
         if (fromUserId && coinsSpent > 0) {
           const giftSendExp = Math.max(1, Math.floor(coinsSpent / 5));
           grantUserExp(fromUserId, giftSendExp, 'GIFT_SEND');
           creditInviteGiftCommission(fromUserId, coinsSpent);
         }
+
         if (roomId && coinsSpent > 0) {
-          const room = rooms.get(roomId);
+          const room = rooms.get(roomId) || getOrCreateRoom(roomId, { hostId: roomId });
           if (room) {
             room.roomTotalCharm = Number(room.roomTotalCharm || 0) + coinsSpent;
             const senderProf = users.get(fromUserId) || {};
@@ -4291,9 +4341,16 @@ wss.on('connection', (ws, req) => {
               }
             }
 
+            const rocketPayload = buildRocketStatePayload(room);
+            safeSend(ws, {
+              type: 'ROCKET_STATE_UPDATE',
+              ackedTxId: txId,
+              rocketState: rocketPayload,
+            });
             broadcastToRoom(room, {
               type: 'ROCKET_STATE_UPDATE',
-              rocketState: buildRocketStatePayload(room),
+              ackedTxId: txId,
+              rocketState: rocketPayload,
             });
             broadcastToRoom(room, buildContributionsPayload(room));
             broadcastToRoom(room, buildRoomSnapshot(room));
