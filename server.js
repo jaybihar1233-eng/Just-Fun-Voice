@@ -2049,14 +2049,789 @@ app.get('/api/config/catalog', (req, res) => {
   res.json(buildDynamicCatalogPayload());
 });
 
-// Standalone Web Admin Dashboard (/admin)
-app.get('/admin', (req, res) => {
-  const htmlPath = path.join(__dirname, 'admin.html');
-  if (fs.existsSync(htmlPath)) {
-    res.sendFile(htmlPath);
-  } else {
-    res.status(404).send('admin.html not found');
-  }
+const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JustFun — Master Admin Control Panel</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --card: #151c28;
+      --card-2: #1c2536;
+      --border: #28344b;
+      --accent: #19cc9d;
+      --accent-2: #4e6fff;
+      --danger: #ff4d4f;
+      --warn: #ffb74d;
+      --text: #f3f6fa;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 800; color: var(--accent); }
+    .auth-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    input, select, textarea {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    button {
+      background: var(--accent);
+      color: #062119;
+      border: none;
+      padding: 9px 15px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.9; }
+    button.secondary { background: var(--card-2); color: var(--text); border: 1px solid var(--border); }
+    button.danger { background: var(--danger); color: #fff; }
+    button.warn { background: var(--warn); color: #1a1200; }
+    .layout { display: flex; flex: 1; min-height: 0; }
+    nav {
+      width: 230px;
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      padding: 14px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .nav-btn {
+      text-align: left;
+      background: transparent;
+      color: var(--muted);
+      padding: 11px 14px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+    .nav-btn.active { background: rgba(25, 204, 157, 0.15); color: var(--accent); border: 1px solid rgba(25, 204, 157, 0.35); }
+    main { flex: 1; padding: 22px; overflow-y: auto; max-width: 1400px; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .stat-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .stat-val { font-size: 22px; font-weight: 800; color: var(--accent); }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+    .card h3 { font-size: 16px; margin-bottom: 12px; color: var(--text); display: flex; align-items: center; justify-content: space-between; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    th, td { border-bottom: 1px solid var(--border); padding: 10px 8px; text-align: left; vertical-align: middle; }
+    th { color: var(--muted); font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .badge.ok { background: rgba(25, 204, 157, 0.16); color: var(--accent); }
+    .badge.ban { background: rgba(255, 77, 79, 0.2); color: var(--danger); }
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #111827;
+      border: 1px solid var(--accent);
+      color: var(--text);
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 13.5px;
+      font-weight: 600;
+      display: none;
+      z-index: 100;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.45);
+    }
+    @media (max-width: 820px) {
+      .layout { flex-direction: column; }
+      nav { width: 100%; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); }
+      .nav-btn { white-space: nowrap; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">⚡ JustFun Master Admin Panel (Real-Time API)</div>
+    <div class="auth-bar">
+      <input type="password" id="adminKey" placeholder="Admin Secret Key" value="justfun-admin-2026" />
+      <button onclick="loadAll()">🔄 Sync Live State</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav>
+      <button class="nav-btn active" onclick="switchTab('users', this)">👤 Users, ID & Device Ban</button>
+      <button class="nav-btn" onclick="switchTab('wallet', this)">💰 Wallet, Coins & Packs</button>
+      <button class="nav-btn" onclick="switchTab('gifts', this)">🎁 Gifts Manager (API)</button>
+      <button class="nav-btn" onclick="switchTab('store', this)">🏎️ Store: Frame / Car / Bubble</button>
+      <button class="nav-btn" onclick="switchTab('medals', this)">🏅 Medals & Levels</button>
+      <button class="nav-btn" onclick="switchTab('events', this)">🎉 Events & Broadcast</button>
+      <button class="nav-btn" onclick="switchTab('rules', this)">🛡️ Invite & Chat Rules</button>
+      <button class="nav-btn" onclick="switchTab('rooms', this)">🎤 Live Rooms & Reports</button>
+    </nav>
+
+    <main>
+      <div class="stats-grid" id="statsGrid">
+        <div class="stat-card"><div class="stat-label">Registered Users</div><div class="stat-val" id="stUsers">0</div></div>
+        <div class="stat-card"><div class="stat-label">Online Sockets</div><div class="stat-val" id="stOnline">0</div></div>
+        <div class="stat-card"><div class="stat-label">Live Voice Rooms</div><div class="stat-val" id="stRooms">0</div></div>
+        <div class="stat-card"><div class="stat-label">API Gifts Count</div><div class="stat-val" id="stGifts">0</div></div>
+        <div class="stat-card"><div class="stat-label">Banned IDs / Devices</div><div class="stat-val" id="stBanned">0 / 0</div></div>
+        <div class="stat-card"><div class="stat-label">Unfollowed DM Limit</div><div class="stat-val" id="stDmLimit">5</div></div>
+      </div>
+
+      <section class="panel active" id="panel-users">
+        <div class="card">
+          <h3>🚫 Quick Ban / Unban User ID or Hardware Phone Device</h3>
+          <div class="form-grid">
+            <input id="banUserId" placeholder="8-Digit User ID (e.g. 12345678)" />
+            <input id="banReason" placeholder="Ban Reason (e.g. Fraud / Abuse)" value="Violated community rules" />
+            <button class="danger" onclick="banUser(true)">🚫 Ban User ID</button>
+            <button class="secondary" onclick="banUser(false)">✅ Unban User ID</button>
+          </div>
+          <div class="form-grid">
+            <input id="banDeviceTarget" placeholder="User ID or Device Key to Hardware-Ban" />
+            <button class="danger" onclick="banDevice(true)">📱 Ban Full Phone (Device)</button>
+            <button class="secondary" onclick="banDevice(false)">🔓 Unban Phone Device</button>
+            <button class="warn" onclick="resetDeviceSlots()">🔄 Reset Phone 3-ID Limit</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>👥 All Users (Real-Time)</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nickname</th>
+                  <th>Status</th>
+                  <th>Lv / Charm</th>
+                  <th>Coins / Diamonds</th>
+                  <th>Device Keys</th>
+                  <th>Quick Actions</th>
+                </tr>
+              </thead>
+              <tbody id="usersTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-wallet">
+        <div class="card">
+          <h3>💰 Add / Deduct User Coins & Diamonds (Live Sync)</h3>
+          <div class="form-grid">
+            <input id="walUserId" placeholder="8-Digit User ID" />
+            <input id="walCoinsDelta" type="number" placeholder="Coins (+Add or -Deduct)" value="100000" />
+            <input id="walDiamondsDelta" type="number" placeholder="Diamonds (+Add or -Deduct)" value="0" />
+            <input id="walNote" placeholder="Reason / Title" value="Admin Wallet Adjustment" />
+            <button onclick="adjustWallet()">⚡ Apply to Wallet</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>💎 Edit Wallet Recharge Packs (API Synced)</h3>
+          <div class="form-grid">
+            <input id="packId" placeholder="Pack ID (p1, p2, p3, p4)" value="p1" />
+            <input id="packCoins" type="number" placeholder="Coins Amount" value="800000" />
+            <input id="packInr" type="number" placeholder="Price (INR ₹)" value="100" />
+            <button onclick="saveRechargePack()">💾 Update Recharge Pack</button>
+          </div>
+          <div id="packsPreview" style="color:var(--muted); font-size:13px; margin-top:8px;"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-gifts">
+        <div class="card">
+          <h3>🎁 Add or Update Gift via API (Loads Directly in App Without APK Update)</h3>
+          <div class="form-grid">
+            <input id="giftId" placeholder="Gift ID (e.g. g_dragon)" />
+            <input id="giftName" placeholder="Gift Name (e.g. Golden Dragon)" />
+            <input id="giftPrice" type="number" placeholder="Price in Coins (e.g. 5000)" />
+            <select id="giftCategory">
+              <option value="Popular">Popular</option>
+              <option value="Luxury">Luxury</option>
+              <option value="Privilege">Privilege</option>
+              <option value="CP">CP</option>
+            </select>
+            <input id="giftTag" placeholder="Tag (HOT / LUXURY / VIP)" value="HOT" />
+            <input id="giftIcon" placeholder="Emoji (🌹) OR Image URL (https://...)" value="🐉" />
+            <input id="giftAnimUrl" placeholder="Full-Screen GIF/WebP/PNG URL (Optional)" />
+            <input id="giftDuration" type="number" step="0.5" placeholder="Duration Sec (e.g. 4.0)" value="3.5" />
+            <button onclick="saveGift()">➕ Save / Update Gift</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>📦 Active API Gifts Catalog</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr><th>ID</th><th>Icon</th><th>Name</th><th>Category / Tag</th><th>Coins</th><th>Animation URL</th><th>Action</th></tr>
+              </thead>
+              <tbody id="giftsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-store">
+        <div class="card">
+          <h3>🎁 Grant VIP Frame / Entry Car / Bubble / Special ID to User</h3>
+          <div class="form-grid">
+            <input id="grantUserId" placeholder="8-Digit User ID" />
+            <select id="grantItemId"></select>
+            <input id="grantDays" type="number" placeholder="Validity Days (e.g. 7, 15, 30)" value="30" />
+            <button onclick="grantStoreItem()">🚀 Grant & Equip Item Live</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>🏎️ Add or Update Store Catalog Item (Frame / Vehicle / Bubble / Mic Wave / Special ID)</h3>
+          <div class="form-grid">
+            <input id="stItemId" placeholder="Item ID (e.g. f_royal_king)" />
+            <input id="stItemName" placeholder="Item Name (e.g. Royal King Frame)" />
+            <select id="stItemCat">
+              <option value="FRAME">FRAME (Avatar Frame)</option>
+              <option value="VEHICLE">VEHICLE (Entry Car)</option>
+              <option value="BUBBLE">BUBBLE (Chat Bubble)</option>
+              <option value="MIC_WAVE">MIC_WAVE (Mic Wave)</option>
+              <option value="SPECIAL_ID">SPECIAL_ID (VIP ID)</option>
+            </select>
+            <input id="stItemPrice" type="number" placeholder="7-Day Base Price (Coins)" value="12000" />
+            <input id="stItemIconUrl" placeholder="Custom Image/GIF URL (Optional)" />
+            <input id="stSpecialIdNum" placeholder="Special ID Number (if SPECIAL_ID)" />
+            <button onclick="saveStoreCatalogItem()">💾 Save Store Item</button>
+          </div>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr><th>ID</th><th>Name</th><th>Category</th><th>7-Day Price</th><th>Image URL</th><th>Action</th></tr>
+              </thead>
+              <tbody id="storeTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-medals">
+        <div class="card">
+          <h3>🏅 Set User Level / EXP or Grant Medal to User ID</h3>
+          <div class="form-grid">
+            <input id="medUserId" placeholder="8-Digit User ID" />
+            <input id="medLevel" type="number" placeholder="New Level (e.g. 25, leave blank to skip)" />
+            <input id="medIdToGrant" placeholder="Medal ID (e.g. wealth_1, charm_1, noble_king)" />
+            <button onclick="updateUserMedalAndLevel()">⚡ Update Level / Unlock Medal</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>🎖️ Add Custom Dynamic Medal</h3>
+          <div class="form-grid">
+            <input id="newMedalId" placeholder="Medal ID (e.g. m_superstar)" />
+            <input id="newMedalName" placeholder="Medal Title (e.g. Superstar Host)" />
+            <input id="newMedalDesc" placeholder="Description" value="Awarded by Official Admin" />
+            <input id="newMedalIconUrl" placeholder="Medal Icon URL (https://...)" />
+            <button onclick="saveCustomMedal()">➕ Add / Update Medal</button>
+          </div>
+          <div id="customMedalsPreview" style="color:var(--muted); font-size:13px;"></div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-events">
+        <div class="card">
+          <h3>📢 Send Real-Time Notification / Customer Service Message</h3>
+          <div class="form-grid">
+            <input id="bcTargetUserId" placeholder="Target User ID (Leave blank for ALL users)" />
+            <input id="bcTitle" placeholder="Notification Title" value="🎉 Official JustFun Reward Event!" />
+            <input id="bcContent" placeholder="Message Content" value="Join live voice rooms tonight at 9 PM for double Lucky Box rewards!" />
+            <select id="bcChannel">
+              <option value="NOTIFICATION">System Notification + Customer Service</option>
+              <option value="CUSTOMER_SERVICE">Customer Service Chat Only</option>
+            </select>
+            <button onclick="sendBroadcast()">📣 Send Live Broadcast</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>🎪 Manage Official Events & Home Banners</h3>
+          <div class="form-grid">
+            <input id="evTitle" placeholder="Event Title" />
+            <input id="evSubtitle" placeholder="Event Description / Rules" />
+            <input id="evBannerUrl" placeholder="Banner Image URL (https://...)" />
+            <button onclick="addEventBanner()">➕ Publish Event / Banner</button>
+          </div>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>ID</th><th>Title</th><th>Description</th><th>Banner URL</th><th>Action</th></tr></thead>
+              <tbody id="eventsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-rules">
+        <div class="card">
+          <h3>🛡️ Global App Rules, Invite Rewards & Anti-Cheat Settings</h3>
+          <div class="form-grid">
+            <div>
+              <label class="stat-label">Max Messages Without Mutual Follow</label>
+              <input id="ruleDmLimit" type="number" value="5" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Max Accounts Per Phone (Device Limit)</label>
+              <input id="ruleMaxAccounts" type="number" value="3" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Invite Day-1 Reward (Coins)</label>
+              <input id="ruleInvDay1" type="number" value="50000" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Invite Day-3 Reward (Coins)</label>
+              <input id="ruleInvDay3" type="number" value="150000" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Invited Friend Welcome Bonus (Coins)</label>
+              <input id="ruleInvWelcome" type="number" value="250000" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Daily Check-In Reward (Coins)</label>
+              <input id="ruleCheckInCoins" type="number" value="10" style="width:100%" />
+            </div>
+          </div>
+          <button onclick="saveGlobalRules()">💾 Save & Broadcast Rules Live</button>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-rooms">
+        <div class="card">
+          <h3>🎤 Active Voice Party Rooms</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>Room ID</th><th>Title</th><th>Host</th><th>Online</th><th>Official</th><th>Actions</th></tr></thead>
+              <tbody id="roomsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>🚩 User Reports & Feedback Tickets</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>Type</th><th>From User</th><th>Target / Contact</th><th>Reason / Content</th><th>Time</th></tr></thead>
+              <tbody id="reportsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    function showToast(msg, isErr = false) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.style.borderColor = isErr ? '#ff4d4f' : '#19cc9d';
+      el.style.display = 'block';
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3200);
+    }
+
+    function switchTab(id, btn) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('panel-' + id).classList.add('active');
+      if (btn) btn.classList.add('active');
+    }
+
+    async function api(path, method = 'GET', body = null) {
+      const key = document.getElementById('adminKey').value.trim();
+      const opts = {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-key': key
+        }
+      };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(path, opts);
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    async function loadAll() {
+      try {
+        const d = await api('/api/admin/overview');
+        document.getElementById('stUsers').textContent = d.stats.totalUsers;
+        document.getElementById('stOnline').textContent = d.stats.onlineUsers;
+        document.getElementById('stRooms').textContent = d.stats.liveRoomsCount;
+        document.getElementById('stGifts').textContent = d.gifts.length;
+        document.getElementById('stBanned').textContent = d.stats.bannedUsersCount + ' / ' + d.stats.bannedDevicesCount;
+        document.getElementById('stDmLimit').textContent = d.rules.maxUnfollowedDmMessages;
+
+        document.getElementById('ruleDmLimit').value = d.rules.maxUnfollowedDmMessages;
+        document.getElementById('ruleMaxAccounts').value = d.rules.maxAccountsPerDevice;
+        document.getElementById('ruleInvDay1').value = d.rules.inviteDay1Coins;
+        document.getElementById('ruleInvDay3').value = d.rules.inviteDay3Coins;
+        document.getElementById('ruleInvWelcome').value = d.rules.inviteFriendWelcomeCoins;
+        document.getElementById('ruleCheckInCoins').value = d.rules.dailyCheckInCoins;
+
+        const uBody = document.getElementById('usersTableBody');
+        uBody.innerHTML = d.users.map(u => '<tr>' +
+          '<td><b>' + u.userId + '</b></td>' +
+          '<td>' + (u.nickname || '-') + '</td>' +
+          '<td>' + (u.isBanned ? '<span class="badge ban">BANNED</span>' : (u.isOnline ? '<span class="badge ok">ONLINE</span>' : '<span class="badge">OFFLINE</span>')) + '</td>' +
+          '<td>Lv.' + (u.level || 0) + ' / ✨' + (u.totalCharmPoints || 0) + '</td>' +
+          '<td>🪙 ' + Number(u.coins || 0).toLocaleString() + ' / 💎 ' + Number(u.diamonds || 0).toLocaleString() + '</td>' +
+          '<td style="font-size:11px; color:var(--muted); max-width:180px; word-break:break-all;">' + ((u.deviceKeys || []).join(', ') || '-') + '</td>' +
+          '<td>' +
+            '<button class="' + (u.isBanned ? 'secondary' : 'danger') + '" style="padding:5px 9px; font-size:11px; margin-right:4px;" onclick="quickToggleBan(\\'' + u.userId + '\\', ' + (!u.isBanned) + ')">' + (u.isBanned ? 'Unban ID' : 'Ban ID') + '</button>' +
+            '<button class="secondary" style="padding:5px 9px; font-size:11px;" onclick="prefillWallet(\\'' + u.userId + '\\')">+Coins</button>' +
+          '</td></tr>'
+        ).join('');
+
+        document.getElementById('packsPreview').innerHTML = Object.entries(d.rechargePacks || {})
+          .map(([k, v]) => '<b>' + k + '</b>: ' + Number(v.coins).toLocaleString() + ' Coins (₹' + v.priceInr + ')')
+          .join(' &nbsp;|&nbsp; ');
+
+        const gBody = document.getElementById('giftsTableBody');
+        gBody.innerHTML = d.gifts.map(g => '<tr>' +
+          '<td><b>' + g.id + '</b></td>' +
+          '<td style="font-size:20px;">' + (g.icon && g.icon.startsWith('http') ? '<img src="' + g.icon + '" style="width:28px;height:28px;border-radius:6px;object-fit:cover;"/>' : (g.icon || '🎁')) + '</td>' +
+          '<td>' + g.name + '</td>' +
+          '<td>' + g.category + ' <span class="badge ok">' + (g.tag || 'HOT') + '</span></td>' +
+          '<td>🪙 ' + Number(g.priceCoins).toLocaleString() + '</td>' +
+          '<td style="font-size:11px; color:var(--muted); max-width:200px; overflow:hidden; text-overflow:ellipsis;">' + (g.animationUrl || 'Built-in') + '</td>' +
+          '<td><button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteGift(\\'' + g.id + '\\')">Delete</button></td>' +
+        '</tr>').join('');
+
+        const grantSel = document.getElementById('grantItemId');
+        grantSel.innerHTML = d.storeCatalog.map(item => '<option value="' + item.id + '">[' + item.category + '] ' + item.name + ' (' + item.id + ')</option>').join('');
+        document.getElementById('storeTableBody').innerHTML = d.storeCatalog.map(item => '<tr>' +
+          '<td><b>' + item.id + '</b></td>' +
+          '<td>' + item.name + '</td>' +
+          '<td><span class="badge ok">' + item.category + '</span></td>' +
+          '<td>🪙 ' + Number(item.basePrice7Days).toLocaleString() + '</td>' +
+          '<td style="font-size:11px; color:var(--muted);">' + (item.iconUrl || 'Built-in') + '</td>' +
+          '<td><button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteStoreItem(\\'' + item.id + '\\')">Remove</button></td>' +
+        '</tr>').join('');
+
+        document.getElementById('customMedalsPreview').innerHTML = (d.customMedals || [])
+          .map(m => '<span class="badge ok" style="margin-right:6px;">🏅 ' + m.id + ': ' + m.name + '</span>').join('') || 'No custom medals added yet.';
+
+        document.getElementById('eventsTableBody').innerHTML = (d.events || []).map(ev => '<tr>' +
+          '<td>' + ev.id + '</td>' +
+          '<td><b>' + ev.title + '</b></td>' +
+          '<td>' + ev.subtitle + '</td>' +
+          '<td style="font-size:11px; color:var(--muted);">' + (ev.bannerUrl || 'Default') + '</td>' +
+          '<td><button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteEvent(\\'' + ev.id + '\\')">Delete</button></td>' +
+        '</tr>').join('');
+
+        document.getElementById('roomsTableBody').innerHTML = (d.rooms || []).map(r => '<tr>' +
+          '<td><b>' + r.id + '</b></td>' +
+          '<td>' + r.title + '</td>' +
+          '<td>' + r.hostName + ' (' + r.hostId + ')</td>' +
+          '<td>🔥 ' + r.onlineCount + '</td>' +
+          '<td>' + (r.isOfficial ? '<span class="badge ok">OFFICIAL</span>' : '-') + '</td>' +
+          '<td>' +
+            '<button class="secondary" style="padding:5px 9px; font-size:11px; margin-right:4px;" onclick="toggleOfficialRoom(\\'' + r.id + '\\', ' + (!r.isOfficial) + ')">' + (r.isOfficial ? 'Unpin' : 'Pin Official') + '</button>' +
+            '<button class="danger" style="padding:5px 9px; font-size:11px;" onclick="closeRoom(\\'' + r.id + '\\')">Close Room</button>' +
+          '</td></tr>'
+        ).join('');
+
+        const repRows = [
+          ...(d.reports || []).map(r => ({ type: 'REPORT', from: r.reporterId, target: r.targetUserId || r.targetRoomId, text: r.reason + ': ' + (r.details || ''), ts: r.createdAt })),
+          ...(d.feedbacks || []).map(f => ({ type: 'FEEDBACK', from: f.userId, target: f.contact || '-', text: '[' + f.type + '] ' + f.content, ts: f.createdAt }))
+        ];
+        document.getElementById('reportsTableBody').innerHTML = repRows.map(r => '<tr>' +
+          '<td><span class="badge ' + (r.type === 'REPORT' ? 'ban' : 'ok') + '">' + r.type + '</span></td>' +
+          '<td>' + r.from + '</td>' +
+          '<td>' + r.target + '</td>' +
+          '<td>' + r.text + '</td>' +
+          '<td style="font-size:11px; color:var(--muted);">' + new Date(r.ts || Date.now()).toLocaleString() + '</td>' +
+        '</tr>').join('');
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    }
+
+    function prefillWallet(uid) {
+      document.getElementById('walUserId').value = uid;
+      switchTab('wallet', document.querySelectorAll('.nav-btn')[1]);
+    }
+
+    async function quickToggleBan(uid, ban) {
+      document.getElementById('banUserId').value = uid;
+      await banUser(ban);
+    }
+
+    async function banUser(ban) {
+      try {
+        const userId = document.getElementById('banUserId').value.trim();
+        const reason = document.getElementById('banReason').value.trim();
+        await api('/api/admin/users/ban', 'POST', { userId, ban, reason });
+        showToast(ban ? 'User ' + userId + ' BANNED!' : 'User ' + userId + ' UNBANNED!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function banDevice(ban) {
+      try {
+        const target = document.getElementById('banDeviceTarget').value.trim();
+        const reason = document.getElementById('banReason').value.trim();
+        await api('/api/admin/devices/ban', 'POST', { target, ban, reason });
+        showToast(ban ? 'Hardware Device BANNED for ' + target + '!' : 'Hardware Device UNBANNED!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function resetDeviceSlots() {
+      try {
+        const target = document.getElementById('banDeviceTarget').value.trim();
+        await api('/api/admin/devices/reset-slots', 'POST', { target });
+        showToast('3-ID Device Slots reset for ' + (target || 'ALL') + '!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function adjustWallet() {
+      try {
+        const userId = document.getElementById('walUserId').value.trim();
+        const coinsDelta = Number(document.getElementById('walCoinsDelta').value || 0);
+        const diamondsDelta = Number(document.getElementById('walDiamondsDelta').value || 0);
+        const title = document.getElementById('walNote').value.trim();
+        await api('/api/admin/wallet/adjust', 'POST', { userId, coinsDelta, diamondsDelta, title });
+        showToast('Wallet updated for ' + userId + '!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveRechargePack() {
+      try {
+        const packId = document.getElementById('packId').value.trim();
+        const coins = Number(document.getElementById('packCoins').value || 0);
+        const priceInr = Number(document.getElementById('packInr').value || 0);
+        await api('/api/admin/wallet/packs', 'POST', { packId, coins, priceInr });
+        showToast('Pack ' + packId + ' updated!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveGift() {
+      try {
+        const body = {
+          id: document.getElementById('giftId').value.trim(),
+          name: document.getElementById('giftName').value.trim(),
+          priceCoins: Number(document.getElementById('giftPrice').value || 10),
+          category: document.getElementById('giftCategory').value,
+          tag: document.getElementById('giftTag').value.trim() || 'HOT',
+          icon: document.getElementById('giftIcon').value.trim() || '🎁',
+          animationUrl: document.getElementById('giftAnimUrl').value.trim(),
+          durationSeconds: Number(document.getElementById('giftDuration').value || 3.0)
+        };
+        await api('/api/admin/gifts', 'POST', body);
+        showToast('Gift "' + body.name + '" saved & pushed to all users!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteGift(id) {
+      try {
+        await api('/api/admin/gifts/' + encodeURIComponent(id), 'DELETE');
+        showToast('Gift ' + id + ' deleted!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function grantStoreItem() {
+      try {
+        const userId = document.getElementById('grantUserId').value.trim();
+        const itemId = document.getElementById('grantItemId').value;
+        const days = Number(document.getElementById('grantDays').value || 7);
+        await api('/api/admin/store/grant', 'POST', { userId, itemId, days });
+        showToast('Granted ' + itemId + ' to ' + userId + ' for ' + days + ' days!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveStoreCatalogItem() {
+      try {
+        const body = {
+          id: document.getElementById('stItemId').value.trim(),
+          name: document.getElementById('stItemName').value.trim(),
+          category: document.getElementById('stItemCat').value,
+          basePrice7Days: Number(document.getElementById('stItemPrice').value || 10000),
+          iconUrl: document.getElementById('stItemIconUrl').value.trim(),
+          specialIdNumber: document.getElementById('stSpecialIdNum').value.trim()
+        };
+        await api('/api/admin/store/catalog', 'POST', body);
+        showToast('Store item "' + body.name + '" saved & synced!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteStoreItem(id) {
+      try {
+        await api('/api/admin/store/catalog/' + encodeURIComponent(id), 'DELETE');
+        showToast('Store item ' + id + ' removed!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function updateUserMedalAndLevel() {
+      try {
+        const userId = document.getElementById('medUserId').value.trim();
+        const level = document.getElementById('medLevel').value.trim();
+        const medalId = document.getElementById('medIdToGrant').value.trim();
+        await api('/api/admin/users/medal-level', 'POST', {
+          userId,
+          level: level === '' ? null : Number(level),
+          medalId
+        });
+        showToast('Updated Level/Medal for ' + userId + '!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveCustomMedal() {
+      try {
+        const body = {
+          id: document.getElementById('newMedalId').value.trim(),
+          name: document.getElementById('newMedalName').value.trim(),
+          description: document.getElementById('newMedalDesc').value.trim(),
+          iconUrl: document.getElementById('newMedalIconUrl').value.trim()
+        };
+        await api('/api/admin/medals', 'POST', body);
+        showToast('Medal "' + body.name + '" added & synced!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function sendBroadcast() {
+      try {
+        const body = {
+          targetUserId: document.getElementById('bcTargetUserId').value.trim(),
+          title: document.getElementById('bcTitle').value.trim(),
+          content: document.getElementById('bcContent').value.trim(),
+          channel: document.getElementById('bcChannel').value
+        };
+        await api('/api/admin/broadcast', 'POST', body);
+        showToast('Live broadcast sent!');
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function addEventBanner() {
+      try {
+        const body = {
+          title: document.getElementById('evTitle').value.trim(),
+          subtitle: document.getElementById('evSubtitle').value.trim(),
+          bannerUrl: document.getElementById('evBannerUrl').value.trim()
+        };
+        await api('/api/admin/events', 'POST', body);
+        showToast('Event / Banner published!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteEvent(id) {
+      try {
+        await api('/api/admin/events/' + encodeURIComponent(id), 'DELETE');
+        showToast('Event deleted!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveGlobalRules() {
+      try {
+        const body = {
+          maxUnfollowedDmMessages: Number(document.getElementById('ruleDmLimit').value || 5),
+          maxAccountsPerDevice: Number(document.getElementById('ruleMaxAccounts').value || 3),
+          inviteDay1Coins: Number(document.getElementById('ruleInvDay1').value || 50000),
+          inviteDay3Coins: Number(document.getElementById('ruleInvDay3').value || 150000),
+          inviteFriendWelcomeCoins: Number(document.getElementById('ruleInvWelcome').value || 250000),
+          dailyCheckInCoins: Number(document.getElementById('ruleCheckInCoins').value || 10)
+        };
+        await api('/api/admin/rules', 'POST', body);
+        showToast('Global Rules saved & pushed live!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function toggleOfficialRoom(roomId, isOfficial) {
+      try {
+        await api('/api/admin/rooms/official', 'POST', { roomId, isOfficial });
+        showToast('Room ' + roomId + ' official status updated!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function closeRoom(roomId) {
+      try {
+        await api('/api/admin/rooms/close', 'POST', { roomId });
+        showToast('Room ' + roomId + ' closed!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    loadAll();
+  </script>
+</body>
+</html>`;
+
+// Standalone Web Admin Dashboard (/admin and /admin.html)
+app.get(['/admin', '/admin.html'], (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.status(200).send(EMBEDDED_ADMIN_HTML);
 });
 
 function requireAdminAuth(req, res, next) {
