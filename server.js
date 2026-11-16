@@ -2,6 +2,8 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 8080;
@@ -45,8 +47,82 @@ const dmUnreadCounts = new Map();
 const blockedUsers = new Map();
 // userDmPrivacy: Map<userId, 'ALL' | 'FOLLOWING'>
 const userDmPrivacy = new Map();
+// userFollowAlerts: Map<userId, Array<{ fromUserId, fromName, fromAvatarUri, timestampMs, isRead }>>
+const userFollowAlerts = new Map();
+// userSystemNotices: Map<userId, Array<{ id, title, content, subTitle, actionText, createdAtMs, isRead }>>
+const userSystemNotices = new Map();
+let MAX_UNFOLLOWED_DM_MESSAGES = 5;
 // reports: Array<ReportRecord>
 const reports = [];
+// Admin Ban & Dynamic Catalog State
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'justfun-admin-2026';
+const bannedUserIds = new Map(); // Map<userId, { reason, bannedAtMs }>
+const bannedDeviceKeys = new Map(); // Map<deviceKey, { reason, bannedAtMs }>
+const DYNAMIC_GIFTS_CATALOG = new Map([
+  ['g1', { id: 'g1', name: 'Rose', icon: '🌹', priceCoins: 10, tag: 'HOT', category: 'Popular', animationUrl: '', durationSeconds: 2.5 }],
+  ['g2', { id: 'g2', name: 'Heart', icon: '💖', priceCoins: 50, tag: 'HOT', category: 'Popular', animationUrl: '', durationSeconds: 2.5 }],
+  ['g_rose_3d', { id: 'g_rose_3d', name: 'Red Rose', icon: '🌹', priceCoins: 99, tag: 'HOT', category: 'Popular', animationUrl: '', durationSeconds: 3.0 }],
+  ['g_kiss', { id: 'g_kiss', name: 'Sweet Kiss', icon: '💋', priceCoins: 199, tag: 'HOT', category: 'Popular', animationUrl: '', durationSeconds: 3.0 }],
+  ['g_sports_car', { id: 'g_sports_car', name: 'Sports Car', icon: '🏎️', priceCoins: 5000, tag: 'LUXURY', category: 'Luxury', animationUrl: '', durationSeconds: 4.5 }],
+  ['g_golden_crown', { id: 'g_golden_crown', name: 'Imperial Crown', icon: '👑', priceCoins: 9999, tag: 'VIP', category: 'Privilege', animationUrl: '', durationSeconds: 5.0 }],
+  ['g_private_jet', { id: 'g_private_jet', name: 'Luxury Jet', icon: '🛩️', priceCoins: 29999, tag: 'LUXURY', category: 'Luxury', animationUrl: '', durationSeconds: 6.0 }],
+]);
+const DYNAMIC_MEDALS_CATALOG = new Map();
+const DYNAMIC_EVENTS_CATALOG = new Map([
+  ['ev_anniv', { id: 'ev_anniv', title: '🎆 3rd Anniversary Party', subtitle: "Let's enjoy the 3rd anniversary fireworks show & live party together!", bannerUrl: '', createdAtMs: Date.now() }],
+  ['ev_daily', { id: 'ev_daily', title: '🎁 Daily Sign-In & Lucky Box', subtitle: 'Log in every day and chat in rooms to collect free coins!', bannerUrl: '', createdAtMs: Date.now() }],
+]);
+
+function formatNoticeDate(ms = Date.now()) {
+  const d = new Date(ms);
+  return `${d.getDate()}/${d.getMonth() + 1} ${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function getOrInitSystemNotices(uid) {
+  const key = String(uid || '');
+  if (!key) return [];
+  let list = userSystemNotices.get(key);
+  if (!list) {
+    const u = users.get(key) || {};
+    const name = u.nickname || `User ${key}`;
+    const now = Date.now();
+    list = [
+      {
+        id: `sys_welcome_${key}`,
+        title: 'Welcome to Just Fun Live!',
+        subTitle: formatNoticeDate(now),
+        content: `Hello ${name}! Welcome to Just Fun Voice Party. Follow friends mutually to unlock unlimited real-time 1-on-1 messages, voice clips, photos, and gifts!`,
+        actionText: 'Explore Rooms',
+        createdAtMs: now,
+        isRead: false,
+      },
+    ];
+    userSystemNotices.set(key, list);
+  }
+  return list;
+}
+
+function pushSystemNotificationToUser(uid, title, content, actionText = 'Go to check') {
+  const key = String(uid || '');
+  if (!key) return;
+  const list = getOrInitSystemNotices(key);
+  const now = Date.now();
+  const item = {
+    id: `notice_${now}_${Math.random().toString(36).slice(2, 6)}`,
+    title,
+    subTitle: formatNoticeDate(now),
+    content,
+    actionText,
+    createdAtMs: now,
+    isRead: false,
+  };
+  list.unshift(item);
+  if (list.length > 50) list.pop();
+  sendToUser(key, {
+    type: 'SYSTEM_NOTIFICATION',
+    notice: item,
+  });
+}
 
 // ============================================================================
 // ZERO-LOAD ANTI-CHEAT GREEDY BABY ENGINE (SYNCED ACROSS ALL CHAT ROOMS)
@@ -72,7 +148,7 @@ const WALLET_EXCHANGE_DIAMOND_COST = {
   330000: 1000000,
   3300000: 10000000,
 };
-const DAILY_CHECKIN_REWARD_COINS = 10;
+let DAILY_CHECKIN_REWARD_COINS = 10;
 const WALLET_RECHARGE_COOLDOWN_MS = 4000;
 const GREEDY_HMAC_SECRET = process.env.GREEDY_HMAC_SECRET || crypto.randomBytes(32).toString('hex');
 
@@ -670,11 +746,18 @@ function buildSocialSnapshotForUser(userId) {
     if (parts.length !== 2) continue;
     if (parts[0] !== uid && parts[1] !== uid) continue;
     const peerId = parts[0] === uid ? parts[1] : parts[0];
-    const peerProfile = users.get(peerId) || {};
+    const visibleMessages = messages.filter(
+      (m) => !(Array.isArray(m.deletedBy) && m.deletedBy.includes(uid))
+    );
+    if (visibleMessages.length === 0 && messages.length > 0) continue;
+    const peerProfile =
+      peerId === '10000'
+        ? { userId: '10000', nickname: 'Customer service', avatarUri: '' }
+        : users.get(peerId) || {};
     const unreadKey = `${uid}:${peerId}`;
     const unreadCount = dmUnreadCounts.get(unreadKey) || 0;
     totalUnreadDm += unreadCount;
-    const lastMsg = messages[messages.length - 1];
+    const lastMsg = visibleMessages[visibleMessages.length - 1];
     let previewText = '';
     if (lastMsg) {
       if (lastMsg.isRecalled) {
@@ -689,6 +772,12 @@ function buildSocialSnapshotForUser(userId) {
         previewText = lastMsg.text || '';
       }
     }
+    const iFollowPeer = peerId === '10000' ? true : Boolean(userFollowing.get(uid)?.has(peerId));
+    const peerFollowsMe = peerId === '10000' ? true : Boolean(userFollowing.get(peerId)?.has(uid));
+    const isMutualFollow = iFollowPeer && peerFollowsMe;
+    const mySentCount = messages.filter((m) => m.fromUserId === uid && !m.isRecalled).length;
+    const isPeerOnline =
+      peerId === '10000' || Boolean(userSockets.has(peerId) && userSockets.get(peerId).size > 0);
     myThreads.push({
       peerUserId: peerId,
       peerName: peerProfile.nickname || lastMsg?.fromName || lastMsg?.toName || `User ${peerId}`,
@@ -696,13 +785,20 @@ function buildSocialSnapshotForUser(userId) {
       unreadCount,
       lastMessageText: previewText,
       lastMessageAtMs: lastMsg ? lastMsg.createdAtMs : 0,
-      messages: messages.slice(-80),
+      isPeerOnline,
+      isFollowedByMe: iFollowPeer,
+      isFollowingMe: peerFollowsMe,
+      isMutualFollow,
+      mySentCount,
+      messages: visibleMessages.slice(-80),
     });
   }
   myThreads.sort((a, b) => (b.lastMessageAtMs || 0) - (a.lastMessageAtMs || 0));
 
   const myBlockedMap = blockedUsers.get(uid);
   const blockedList = myBlockedMap ? Array.from(myBlockedMap.values()) : [];
+  const alertsList = (userFollowAlerts.get(uid) || []).slice(0, 30);
+  const sysNotices = getOrInitSystemNotices(uid).slice(0, 30);
 
   return {
     type: 'SOCIAL_STATE_SYNC',
@@ -720,6 +816,8 @@ function buildSocialSnapshotForUser(userId) {
     totalUnreadDm,
     blockedUsers: blockedList,
     dmPrivacy: userDmPrivacy.get(uid) || 'ALL',
+    followAlerts: alertsList,
+    systemNotifications: sysNotices,
   };
 }
 
@@ -1083,9 +1181,9 @@ function grantUserExp(uid, expGain, reason = 'EXP') {
 // ============================================================================
 // REAL-TIME ANTI-CHEAT & NON-CLONE INVITE REWARDS ENGINE
 // ============================================================================
-const INVITE_FRIEND_WELCOME_COINS = 250000;
-const INVITE_DAY1_COINS = 150000;
-const INVITE_DAY3_COINS = 100000;
+let INVITE_FRIEND_WELCOME_COINS = 250000;
+let INVITE_DAY1_COINS = 150000;
+let INVITE_DAY3_COINS = 100000;
 const INVITE_DAY3_DELAY_MS = 48 * 60 * 60 * 1000;
 const INVITE_RECHARGE_THRESHOLD = 500000;
 const INVITE_RECHARGE_BONUS_COINS = 250000;
@@ -1098,6 +1196,185 @@ const userKnownDevices = new Map();      // Map<userId, Set<fingerprintKey>>
 const deviceUserAccounts = new Map();    // Map<fingerprintKey, Set<userId>>
 const inviteBindRateLimits = new Map();  // Map<userId, Array<timestampMs>>
 const inviteTickerHistory = [];          // Array<{ id, userName, coins, reason, createdAtMs }>
+
+// ============================================================================
+// STRICT 3-ID PER PHONE HARDWARE LOCK (SERVER-AUTHORITATIVE + DISK PERSISTED)
+// ============================================================================
+let MAX_ACCOUNTS_PER_DEVICE = 3;
+const DEVICE_LEDGER_FILE = path.join(__dirname, '.device_account_ledger.json');
+// deviceAccountSlots: Map<deviceKey, Map<user8DigitId, AccountSlotRecord>>
+const deviceAccountSlots = new Map();
+
+function loadDeviceAccountLedgerFromDisk() {
+  try {
+    if (!fs.existsSync(DEVICE_LEDGER_FILE)) return;
+    const raw = fs.readFileSync(DEVICE_LEDGER_FILE, 'utf8');
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return;
+    Object.entries(parsed).forEach(([devKey, slotList]) => {
+      if (!Array.isArray(slotList)) return;
+      const slotMap = new Map();
+      slotList.forEach((slot) => {
+        const id8 = String(slot.user8DigitId || slot.userId || '').trim();
+        if (id8.length === 8) {
+          slotMap.set(id8, {
+            user8DigitId: id8,
+            accountUid: String(slot.accountUid || id8),
+            nickname: String(slot.nickname || ''),
+            avatarUri: String(slot.avatarUri || ''),
+            gender: String(slot.gender || 'Boy'),
+            bio: String(slot.bio || 'Welcome to JustFun'),
+            country: String(slot.country || 'India'),
+            level: Number(slot.level || 0),
+            profileCompleted: Boolean(slot.profileCompleted ?? true),
+            createdAtMs: Number(slot.createdAtMs || Date.now()),
+          });
+        }
+      });
+      if (slotMap.size > 0) {
+        deviceAccountSlots.set(devKey, slotMap);
+      }
+    });
+  } catch (err) {
+    console.warn('Failed to load device account ledger:', err.message);
+  }
+}
+
+function saveDeviceAccountLedgerToDisk() {
+  try {
+    const out = {};
+    deviceAccountSlots.forEach((slotMap, devKey) => {
+      out[devKey] = Array.from(slotMap.values());
+    });
+    fs.writeFileSync(DEVICE_LEDGER_FILE, JSON.stringify(out, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('Failed to persist device account ledger:', err.message);
+  }
+}
+
+loadDeviceAccountLedgerFromDisk();
+
+function getRegisteredAccountsForDeviceKeys(keys) {
+  if (!Array.isArray(keys) || keys.length === 0) return [];
+  const mergedBy8DigitId = new Map();
+  keys.forEach((k) => {
+    const slotMap = deviceAccountSlots.get(k);
+    if (!slotMap) return;
+    slotMap.forEach((slot, id8) => {
+      const prev = mergedBy8DigitId.get(id8);
+      if (!prev || (slot.nickname && !prev.nickname)) {
+        mergedBy8DigitId.set(id8, { ...slot });
+      }
+    });
+  });
+  return Array.from(mergedBy8DigitId.values())
+    .sort((a, b) => Number(a.createdAtMs || 0) - Number(b.createdAtMs || 0))
+    .slice(0, MAX_ACCOUNTS_PER_DEVICE);
+}
+
+function upsertAccountSlotAcrossDeviceKeys(keys, slotRecord) {
+  if (!Array.isArray(keys) || keys.length === 0 || !slotRecord || !slotRecord.user8DigitId) return;
+  const id8 = String(slotRecord.user8DigitId);
+  keys.forEach((k) => {
+    let slotMap = deviceAccountSlots.get(k);
+    if (!slotMap) {
+      slotMap = new Map();
+      deviceAccountSlots.set(k, slotMap);
+    }
+    const existing = slotMap.get(id8);
+    if (existing || slotMap.size < MAX_ACCOUNTS_PER_DEVICE) {
+      slotMap.set(id8, {
+        ...(existing || {}),
+        ...slotRecord,
+        user8DigitId: id8,
+        createdAtMs: Number(existing?.createdAtMs || slotRecord.createdAtMs || Date.now()),
+      });
+    }
+  });
+}
+
+function evaluateServerDeviceAccountSlot(uid, accountUid, profileObj, integrity) {
+  const cleanId8 = String(uid || '').trim();
+  const cleanAccUid = String(accountUid || cleanId8).trim();
+  if (!integrity || typeof integrity !== 'object') {
+    return { allowed: true, accounts: [] };
+  }
+  const keys = getDeviceKeysFromIntegrity(integrity);
+  const existingAccounts = getRegisteredAccountsForDeviceKeys(keys);
+
+  if (integrity.isClonedEnvironment) {
+    return {
+      allowed: false,
+      reason: 'CLONE_DETECTED',
+      allowedAccounts: existingAccounts,
+      error: 'Clone / Dual-App / Parallel Space me nayi ID banana allowed nahi hai. Kripya main phone app use karein.',
+    };
+  }
+
+  if (keys.length === 0) {
+    return { allowed: true, accounts: existingAccounts };
+  }
+
+  const matched = existingAccounts.find(
+    (acc) => acc.user8DigitId === cleanId8 || (cleanAccUid && acc.accountUid === cleanAccUid)
+  );
+
+  if (matched) {
+    const updatedSlot = {
+      ...matched,
+      user8DigitId: matched.user8DigitId,
+      accountUid: cleanAccUid || matched.accountUid,
+      nickname: String(profileObj?.nickname || matched.nickname || ''),
+      avatarUri: String(profileObj?.avatarUri || matched.avatarUri || ''),
+      gender: String(profileObj?.gender || matched.gender || 'Boy'),
+      bio: String(profileObj?.bio || matched.bio || 'Welcome to JustFun'),
+      country: String(profileObj?.country || matched.country || 'India'),
+      level: Math.max(Number(matched.level || 0), Number(profileObj?.level || 0)),
+      profileCompleted: Boolean(
+        matched.profileCompleted ||
+          (profileObj?.nickname && profileObj.nickname !== 'जितेश ❤️')
+      ),
+    };
+    upsertAccountSlotAcrossDeviceKeys(keys, updatedSlot);
+    saveDeviceAccountLedgerToDisk();
+    return {
+      allowed: true,
+      accounts: getRegisteredAccountsForDeviceKeys(keys),
+    };
+  }
+
+  if (existingAccounts.length >= MAX_ACCOUNTS_PER_DEVICE) {
+    return {
+      allowed: false,
+      reason: 'LIMIT_REACHED',
+      allowedAccounts: existingAccounts,
+      error: `Ek phone me maximum ${MAX_ACCOUNTS_PER_DEVICE} IDs hi ban sakti hain (${existingAccounts.length}/${MAX_ACCOUNTS_PER_DEVICE} IDs ban chuki hain). Nayi 4th ID is phone par nahi ban sakti. Kripya apni pehle se bani 3 IDs me se kisi ek se login karein.`,
+    };
+  }
+
+  if (cleanId8.length === 8) {
+    const newSlot = {
+      user8DigitId: cleanId8,
+      accountUid: cleanAccUid || cleanId8,
+      nickname: String(profileObj?.nickname || ''),
+      avatarUri: String(profileObj?.avatarUri || ''),
+      gender: String(profileObj?.gender || 'Boy'),
+      bio: String(profileObj?.bio || 'Welcome to JustFun'),
+      country: String(profileObj?.country || 'India'),
+      level: Number(profileObj?.level || 0),
+      profileCompleted: Boolean(profileObj?.nickname && profileObj.nickname !== 'जितेश ❤️'),
+      createdAtMs: Date.now(),
+    };
+    upsertAccountSlotAcrossDeviceKeys(keys, newSlot);
+    saveDeviceAccountLedgerToDisk();
+  }
+
+  return {
+    allowed: true,
+    accounts: getRegisteredAccountsForDeviceKeys(keys),
+  };
+}
 
 function getOrCreateInviteLedger(uid) {
   if (!uid) return null;
@@ -1700,6 +1977,479 @@ app.get('/api/users', (req, res) => {
   res.json({ users: Array.from(users.values()).slice(0, 50) });
 });
 
+function buildDynamicCatalogPayload() {
+  return {
+    type: 'DYNAMIC_CATALOG_SYNC',
+    gifts: Array.from(DYNAMIC_GIFTS_CATALOG.values()),
+    storeCatalog: Object.values(STORE_CATALOG),
+    customMedals: Array.from(DYNAMIC_MEDALS_CATALOG.values()),
+    events: Array.from(DYNAMIC_EVENTS_CATALOG.values()),
+    rechargePacks: WALLET_RECHARGE_PACKS,
+    rules: {
+      maxUnfollowedDmMessages: MAX_UNFOLLOWED_DM_MESSAGES,
+      maxAccountsPerDevice: MAX_ACCOUNTS_PER_DEVICE,
+      inviteDay1Coins: INVITE_DAY1_COINS,
+      inviteDay3Coins: INVITE_DAY3_COINS,
+      inviteFriendWelcomeCoins: INVITE_FRIEND_WELCOME_COINS,
+      dailyCheckInCoins: DAILY_CHECKIN_REWARD_COINS,
+    },
+    updatedAtMs: Date.now(),
+  };
+}
+
+function broadcastDynamicCatalog() {
+  const payload = JSON.stringify(buildDynamicCatalogPayload());
+  for (const ws of wss.clients) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(payload);
+      } catch (_) {}
+    }
+  }
+}
+
+function isUserOrDeviceBanned(uid, integrity = null) {
+  const cleanId = String(uid || '').trim();
+  if (cleanId && bannedUserIds.has(cleanId)) {
+    const info = bannedUserIds.get(cleanId);
+    return { banned: true, reason: info.reason || 'Your account ID has been banned by Admin.' };
+  }
+  const keys = [
+    ...(userKnownDevices.get(cleanId) || []),
+    ...getDeviceKeysFromIntegrity(integrity),
+  ];
+  for (const k of keys) {
+    if (bannedDeviceKeys.has(k)) {
+      const info = bannedDeviceKeys.get(k);
+      return { banned: true, reason: info.reason || 'This phone device has been hardware-banned by Admin.' };
+    }
+  }
+  return { banned: false, reason: '' };
+}
+
+function kickAndNotifyBannedUser(uid, reason) {
+  const cleanId = String(uid || '').trim();
+  if (!cleanId) return;
+  for (const r of rooms.values()) {
+    if (r.activeClients && r.activeClients.has(cleanId)) {
+      const sock = r.activeClients.get(cleanId);
+      removeUserFromRoom(sock, r.id, cleanId);
+    }
+  }
+  sendToUser(cleanId, {
+    type: 'ACCOUNT_BANNED',
+    userId: cleanId,
+    reason: reason || 'Your account has been suspended by Admin.',
+    bannedAtMs: Date.now(),
+  });
+}
+
+// Public API for app dynamic catalog
+app.get('/api/config/catalog', (req, res) => {
+  res.json(buildDynamicCatalogPayload());
+});
+
+// Standalone Web Admin Dashboard (/admin)
+app.get('/admin', (req, res) => {
+  const htmlPath = path.join(__dirname, 'admin.html');
+  if (fs.existsSync(htmlPath)) {
+    res.sendFile(htmlPath);
+  } else {
+    res.status(404).send('admin.html not found');
+  }
+});
+
+function requireAdminAuth(req, res, next) {
+  const key = String(req.headers['x-admin-key'] || req.query.key || '').trim();
+  if (key !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Invalid Admin Secret Key!' });
+  }
+  next();
+}
+
+app.get('/api/admin/overview', requireAdminAuth, (req, res) => {
+  const userList = Array.from(users.values()).map((u) => {
+    const uid = String(u.userId || '');
+    const devKeys = Array.from(userKnownDevices.get(uid) || []);
+    const isDevBanned = devKeys.some((k) => bannedDeviceKeys.has(k));
+    return {
+      userId: uid,
+      nickname: u.nickname || `User ${uid}`,
+      gender: u.gender || 'Boy',
+      level: Number(userLevels.get(uid)?.level ?? u.level ?? 0),
+      totalCharmPoints: Number(u.totalCharmPoints || 0),
+      coins: getOrInitGreedyBalance(uid),
+      diamonds: Number(userDiamonds.get(uid) || 0),
+      isOnline: Boolean(userSockets.get(uid)?.size),
+      isBanned: bannedUserIds.has(uid) || isDevBanned,
+      deviceKeys: devKeys,
+    };
+  });
+  let onlineCount = 0;
+  for (const s of userSockets.values()) {
+    if (s && s.size > 0) onlineCount += 1;
+  }
+  res.json({
+    stats: {
+      totalUsers: users.size,
+      onlineUsers: onlineCount,
+      liveRoomsCount: getLiveRoomsSummary().length,
+      bannedUsersCount: bannedUserIds.size,
+      bannedDevicesCount: bannedDeviceKeys.size,
+    },
+    users: userList,
+    gifts: Array.from(DYNAMIC_GIFTS_CATALOG.values()),
+    storeCatalog: Object.values(STORE_CATALOG),
+    customMedals: Array.from(DYNAMIC_MEDALS_CATALOG.values()),
+    events: Array.from(DYNAMIC_EVENTS_CATALOG.values()),
+    rechargePacks: WALLET_RECHARGE_PACKS,
+    rules: {
+      maxUnfollowedDmMessages: MAX_UNFOLLOWED_DM_MESSAGES,
+      maxAccountsPerDevice: MAX_ACCOUNTS_PER_DEVICE,
+      inviteDay1Coins: INVITE_DAY1_COINS,
+      inviteDay3Coins: INVITE_DAY3_COINS,
+      inviteFriendWelcomeCoins: INVITE_FRIEND_WELCOME_COINS,
+      dailyCheckInCoins: DAILY_CHECKIN_REWARD_COINS,
+    },
+    rooms: getLiveRoomsSummary(),
+    reports: reports.slice(-50).reverse(),
+    feedbacks: feedbacks.slice(-50).reverse(),
+  });
+});
+
+app.post('/api/admin/users/ban', requireAdminAuth, (req, res) => {
+  const userId = String(req.body.userId || '').trim();
+  const ban = Boolean(req.body.ban);
+  const reason = String(req.body.reason || 'Banned by Admin').trim();
+  if (!userId) return res.status(400).json({ error: 'userId is required' });
+  if (ban) {
+    bannedUserIds.set(userId, { reason, bannedAtMs: Date.now() });
+    kickAndNotifyBannedUser(userId, reason);
+  } else {
+    bannedUserIds.delete(userId);
+    sendToUser(userId, { type: 'ACCOUNT_UNBANNED', userId });
+  }
+  res.json({ ok: true, userId, banned: ban });
+});
+
+app.post('/api/admin/devices/ban', requireAdminAuth, (req, res) => {
+  const target = String(req.body.target || '').trim();
+  const ban = Boolean(req.body.ban);
+  const reason = String(req.body.reason || 'Hardware device banned by Admin').trim();
+  if (!target) return res.status(400).json({ error: 'User ID or Device Key is required' });
+  const keysToAffect = new Set();
+  if (target.startsWith('fp:') || target.startsWith('drm:')) {
+    keysToAffect.add(target);
+  } else {
+    for (const k of userKnownDevices.get(target) || []) keysToAffect.add(k);
+    deviceAccountSlots.forEach((slotMap, devKey) => {
+      if (slotMap.has(target)) keysToAffect.add(devKey);
+    });
+  }
+  if (keysToAffect.size === 0) {
+    keysToAffect.add(`fp:${target}`);
+  }
+  keysToAffect.forEach((k) => {
+    if (ban) {
+      bannedDeviceKeys.set(k, { reason, bannedAtMs: Date.now() });
+      for (const uid of deviceUserAccounts.get(k) || []) {
+        kickAndNotifyBannedUser(uid, reason);
+      }
+    } else {
+      bannedDeviceKeys.delete(k);
+    }
+  });
+  res.json({ ok: true, affectedKeys: Array.from(keysToAffect), banned: ban });
+});
+
+app.post('/api/admin/devices/reset-slots', requireAdminAuth, (req, res) => {
+  const target = String(req.body.target || '').trim();
+  if (!target) {
+    deviceAccountSlots.clear();
+    saveDeviceAccountLedgerToDisk();
+    return res.json({ ok: true, cleared: 'ALL' });
+  }
+  const keys = new Set();
+  if (target.startsWith('fp:') || target.startsWith('drm:')) {
+    keys.add(target);
+  } else {
+    for (const k of userKnownDevices.get(target) || []) keys.add(k);
+    deviceAccountSlots.forEach((slotMap, devKey) => {
+      if (slotMap.has(target)) keys.add(devKey);
+    });
+  }
+  keys.forEach((k) => deviceAccountSlots.delete(k));
+  saveDeviceAccountLedgerToDisk();
+  res.json({ ok: true, clearedKeys: Array.from(keys) });
+});
+
+app.post('/api/admin/wallet/adjust', requireAdminAuth, (req, res) => {
+  const userId = String(req.body.userId || '').trim();
+  const coinsDelta = Math.trunc(Number(req.body.coinsDelta || 0));
+  const diamondsDelta = Math.trunc(Number(req.body.diamondsDelta || 0));
+  const title = String(req.body.title || 'Admin Wallet Adjustment').trim();
+  if (!userId) return res.status(400).json({ error: 'userId is required' });
+
+  const curCoins = getOrInitGreedyBalance(userId);
+  const nextCoins = Math.max(0, Math.min(GREEDY_MAX_BALANCE, curCoins + coinsDelta));
+  greedyUserBalances.set(userId, nextCoins);
+  if (coinsDelta !== 0) {
+    recordWalletTx(
+      userId,
+      coinsDelta > 0 ? 'RECHARGE' : 'COIN_USAGE',
+      title,
+      `${coinsDelta > 0 ? '+' : ''}${coinsDelta.toLocaleString('en-US')} Coins`,
+      coinsDelta > 0
+    );
+  }
+
+  const curDiamonds = Number(userDiamonds.get(userId) || 0);
+  const nextDiamonds = Math.max(0, curDiamonds + diamondsDelta);
+  userDiamonds.set(userId, nextDiamonds);
+  if (diamondsDelta !== 0) {
+    recordWalletTx(
+      userId,
+      'DIAMOND_BILLS',
+      title,
+      `${diamondsDelta > 0 ? '+' : ''}${diamondsDelta.toLocaleString('en-US')} Diamonds`,
+      diamondsDelta > 0
+    );
+  }
+
+  pushWalletSyncToUser(userId);
+  sendToUser(userId, { type: 'WALLET_BALANCE_SYNC', serverBalance: nextCoins });
+  pushSystemNotificationToUser(
+    userId,
+    'Wallet Updated by Official Admin',
+    `${title}: Coins=${nextCoins.toLocaleString('en-US')}, Diamonds=${nextDiamonds.toLocaleString('en-US')}`
+  );
+  res.json({ ok: true, userId, coins: nextCoins, diamonds: nextDiamonds });
+});
+
+app.post('/api/admin/wallet/packs', requireAdminAuth, (req, res) => {
+  const packId = String(req.body.packId || '').trim();
+  const coins = Math.max(100, Math.floor(Number(req.body.coins || 0)));
+  const priceInr = Math.max(1, Math.floor(Number(req.body.priceInr || 0)));
+  if (!packId) return res.status(400).json({ error: 'packId is required' });
+  WALLET_RECHARGE_PACKS[packId] = { coins, priceInr };
+  broadcastDynamicCatalog();
+  res.json({ ok: true, rechargePacks: WALLET_RECHARGE_PACKS });
+});
+
+app.post('/api/admin/gifts', requireAdminAuth, (req, res) => {
+  const id = String(req.body.id || `g_${Date.now()}`).trim();
+  const name = String(req.body.name || '').trim();
+  const priceCoins = Math.max(1, Math.floor(Number(req.body.priceCoins || 10)));
+  const category = String(req.body.category || 'Popular').trim();
+  const tag = String(req.body.tag || 'HOT').trim();
+  const icon = String(req.body.icon || '🎁').trim();
+  const animationUrl = String(req.body.animationUrl || '').trim();
+  const durationSeconds = Math.max(1, Number(req.body.durationSeconds || 3.0));
+  if (!name) return res.status(400).json({ error: 'Gift name is required' });
+  const gift = { id, name, icon, priceCoins, tag, category, animationUrl, durationSeconds };
+  DYNAMIC_GIFTS_CATALOG.set(id, gift);
+  broadcastDynamicCatalog();
+  res.json({ ok: true, gift });
+});
+
+app.delete('/api/admin/gifts/:id', requireAdminAuth, (req, res) => {
+  const id = String(req.params.id || '').trim();
+  DYNAMIC_GIFTS_CATALOG.delete(id);
+  broadcastDynamicCatalog();
+  res.json({ ok: true, deletedId: id });
+});
+
+app.post('/api/admin/store/catalog', requireAdminAuth, (req, res) => {
+  const id = String(req.body.id || `st_${Date.now()}`).trim();
+  const name = String(req.body.name || '').trim();
+  const category = String(req.body.category || 'FRAME').trim();
+  const basePrice7Days = Math.max(100, Math.floor(Number(req.body.basePrice7Days || 10000)));
+  const iconUrl = String(req.body.iconUrl || '').trim();
+  const specialIdNumber = String(req.body.specialIdNumber || '').trim();
+  if (!name) return res.status(400).json({ error: 'Item name is required' });
+  STORE_CATALOG[id] = { id, name, category, basePrice7Days, iconUrl, specialIdNumber };
+  broadcastDynamicCatalog();
+  res.json({ ok: true, item: STORE_CATALOG[id] });
+});
+
+app.delete('/api/admin/store/catalog/:id', requireAdminAuth, (req, res) => {
+  const id = String(req.params.id || '').trim();
+  delete STORE_CATALOG[id];
+  broadcastDynamicCatalog();
+  res.json({ ok: true, deletedId: id });
+});
+
+app.post('/api/admin/store/grant', requireAdminAuth, (req, res) => {
+  const userId = String(req.body.userId || '').trim();
+  const itemId = String(req.body.itemId || '').trim();
+  const days = Math.max(1, Math.floor(Number(req.body.days || 7)));
+  const spec = STORE_CATALOG[itemId];
+  if (!userId || !spec) return res.status(400).json({ error: 'Valid userId and itemId required' });
+  const nowMs = Date.now();
+  const inv = pruneAndSyncUserStore(userId, nowMs);
+  const existing = inv.items.get(itemId);
+  const baseExpiry = existing && Number(existing.expiresAtMs || 0) > nowMs ? Number(existing.expiresAtMs) : nowMs;
+  inv.items.set(itemId, {
+    itemId,
+    expiresAtMs: baseExpiry + days * STORE_DAY_MS,
+    totalDaysPurchased: (existing ? Number(existing.totalDaysPurchased || 0) : 0) + days,
+    giftedByName: 'Official Admin',
+    purchasedAtMs: nowMs,
+  });
+  inv.equipped[spec.category] = itemId;
+  pruneAndSyncUserStore(userId, nowMs);
+  sendToUser(userId, buildStoreStatePayload(userId));
+  pushSystemNotificationToUser(
+    userId,
+    '🎁 VIP Store Item Granted!',
+    `Official Admin granted you "${spec.name}" (${days} Days) and equipped it automatically!`
+  );
+  res.json({ ok: true, userId, itemId, days });
+});
+
+app.post('/api/admin/users/medal-level', requireAdminAuth, (req, res) => {
+  const userId = String(req.body.userId || '').trim();
+  if (!userId) return res.status(400).json({ error: 'userId is required' });
+  const prof = users.get(userId) || { userId, user8DigitId: userId, nickname: `User ${userId}` };
+  if (req.body.level !== null && req.body.level !== undefined && req.body.level !== '') {
+    const newLv = Math.max(0, Math.min(100, Math.floor(Number(req.body.level))));
+    const st = getOrInitUserLevelState(userId);
+    st.level = newLv;
+    st.exp = getTotalExpForLevel(newLv);
+    userLevels.set(userId, st);
+    prof.level = newLv;
+    sendToUser(userId, buildLevelStatePayload(userId));
+  }
+  const medalId = String(req.body.medalId || '').trim();
+  if (medalId) {
+    const medals = new Set(Array.isArray(prof.unlockedMedalIds) ? prof.unlockedMedalIds : []);
+    medals.add(medalId);
+    prof.unlockedMedalIds = Array.from(medals);
+  }
+  users.set(userId, prof);
+  sendToUser(userId, { type: 'USER_REGISTERED', profile: prof });
+  pushSystemNotificationToUser(userId, '🏅 Profile Upgraded by Admin!', `Your Level/Medals were updated by Official Admin.`);
+  res.json({ ok: true, profile: prof });
+});
+
+app.post('/api/admin/medals', requireAdminAuth, (req, res) => {
+  const id = String(req.body.id || `m_${Date.now()}`).trim();
+  const name = String(req.body.name || '').trim();
+  const description = String(req.body.description || 'Official Medal').trim();
+  const iconUrl = String(req.body.iconUrl || '').trim();
+  if (!name) return res.status(400).json({ error: 'Medal name required' });
+  const medal = { id, name, description, iconUrl };
+  DYNAMIC_MEDALS_CATALOG.set(id, medal);
+  broadcastDynamicCatalog();
+  res.json({ ok: true, medal });
+});
+
+app.post('/api/admin/broadcast', requireAdminAuth, (req, res) => {
+  const targetUserId = String(req.body.targetUserId || '').trim();
+  const title = String(req.body.title || 'Official Notice').trim();
+  const content = String(req.body.content || '').trim();
+  const channel = String(req.body.channel || 'NOTIFICATION').trim();
+  if (!content) return res.status(400).json({ error: 'Content is required' });
+
+  const targets = targetUserId ? [targetUserId] : Array.from(users.keys());
+  targets.forEach((uid) => {
+    if (channel === 'NOTIFICATION') {
+      pushSystemNotificationToUser(uid, title, content, 'Go to check');
+    }
+    const threadKey = getThreadKey('10000', uid);
+    const list = dmThreads.get(threadKey) || [];
+    const dmItem = {
+      id: `dm_admin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      fromUserId: '10000',
+      fromName: 'Customer service',
+      fromAvatarUri: '',
+      toUserId: uid,
+      toName: users.get(uid)?.nickname || `User ${uid}`,
+      toAvatarUri: '',
+      text: `${title}: ${content}`,
+      msgType: 'TEXT',
+      voiceDurationSec: 0,
+      audioBase64: '',
+      imageBase64: '',
+      giftName: '',
+      giftIcon: '',
+      giftCount: 1,
+      createdAtMs: Date.now(),
+      isRecalled: false,
+      isRead: false,
+      deletedBy: [],
+    };
+    list.push(dmItem);
+    dmThreads.set(threadKey, list);
+    dmUnreadCounts.set(`${uid}:10000`, (dmUnreadCounts.get(`${uid}:10000`) || 0) + 1);
+    sendToUser(uid, { type: 'NEW_DM', peerUserId: '10000', message: dmItem });
+    pushSocialSyncToUser(uid);
+  });
+  res.json({ ok: true, sentCount: targets.length });
+});
+
+app.post('/api/admin/events', requireAdminAuth, (req, res) => {
+  const id = `ev_${Date.now()}`;
+  const title = String(req.body.title || '').trim();
+  const subtitle = String(req.body.subtitle || '').trim();
+  const bannerUrl = String(req.body.bannerUrl || '').trim();
+  if (!title) return res.status(400).json({ error: 'Event title is required' });
+  const ev = { id, title, subtitle, bannerUrl, createdAtMs: Date.now() };
+  DYNAMIC_EVENTS_CATALOG.set(id, ev);
+  broadcastDynamicCatalog();
+  res.json({ ok: true, event: ev });
+});
+
+app.delete('/api/admin/events/:id', requireAdminAuth, (req, res) => {
+  const id = String(req.params.id || '').trim();
+  DYNAMIC_EVENTS_CATALOG.delete(id);
+  broadcastDynamicCatalog();
+  res.json({ ok: true, deletedId: id });
+});
+
+app.post('/api/admin/rules', requireAdminAuth, (req, res) => {
+  if (req.body.maxUnfollowedDmMessages !== undefined) {
+    MAX_UNFOLLOWED_DM_MESSAGES = Math.max(1, Math.floor(Number(req.body.maxUnfollowedDmMessages)));
+  }
+  if (req.body.maxAccountsPerDevice !== undefined) {
+    MAX_ACCOUNTS_PER_DEVICE = Math.max(1, Math.floor(Number(req.body.maxAccountsPerDevice)));
+  }
+  if (req.body.inviteDay1Coins !== undefined) {
+    INVITE_DAY1_COINS = Math.max(0, Math.floor(Number(req.body.inviteDay1Coins)));
+  }
+  if (req.body.inviteDay3Coins !== undefined) {
+    INVITE_DAY3_COINS = Math.max(0, Math.floor(Number(req.body.inviteDay3Coins)));
+  }
+  if (req.body.inviteFriendWelcomeCoins !== undefined) {
+    INVITE_FRIEND_WELCOME_COINS = Math.max(0, Math.floor(Number(req.body.inviteFriendWelcomeCoins)));
+  }
+  if (req.body.dailyCheckInCoins !== undefined) {
+    DAILY_CHECKIN_REWARD_COINS = Math.max(0, Math.floor(Number(req.body.dailyCheckInCoins)));
+  }
+  broadcastDynamicCatalog();
+  res.json({ ok: true, rules: buildDynamicCatalogPayload().rules });
+});
+
+app.post('/api/admin/rooms/official', requireAdminAuth, (req, res) => {
+  const roomId = String(req.body.roomId || '').trim();
+  const isOfficial = Boolean(req.body.isOfficial);
+  const room = rooms.get(roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  room.isOfficial = isOfficial;
+  broadcastLiveRoomsToHome();
+  res.json({ ok: true, roomId, isOfficial });
+});
+
+app.post('/api/admin/rooms/close', requireAdminAuth, (req, res) => {
+  const roomId = String(req.body.roomId || '').trim();
+  const room = rooms.get(roomId);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  broadcastToRoom(room, { type: 'ROOM_CLOSED_BY_ADMIN', roomId, reason: 'Closed by Official Admin' });
+  rooms.delete(roomId);
+  broadcastLiveRoomsToHome();
+  res.json({ ok: true, closedRoomId: roomId });
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, maxPayload: 4 * 1024 * 1024, perMessageDeflate: false });
 
@@ -1755,12 +2505,92 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'SYNC_DEVICE_ACCOUNT_SLOTS': {
+        const integrity = msg.deviceIntegrity;
+        const keys = getDeviceKeysFromIntegrity(integrity);
+        if (keys.length > 0 && Array.isArray(msg.localAccounts)) {
+          let changed = false;
+          msg.localAccounts.slice(0, MAX_ACCOUNTS_PER_DEVICE).forEach((acc) => {
+            if (!acc || typeof acc !== 'object') return;
+            const id8 = String(acc.user8DigitId || acc.userId || '').trim();
+            if (id8.length !== 8) return;
+            const currentList = getRegisteredAccountsForDeviceKeys(keys);
+            const alreadyPresent = currentList.some((item) => item.user8DigitId === id8);
+            if (alreadyPresent || currentList.length < MAX_ACCOUNTS_PER_DEVICE) {
+              upsertAccountSlotAcrossDeviceKeys(keys, {
+                user8DigitId: id8,
+                accountUid: String(acc.accountUid || id8),
+                nickname: String(acc.nickname || ''),
+                avatarUri: String(acc.avatarUri || ''),
+                gender: String(acc.gender || 'Boy'),
+                bio: String(acc.bio || 'Welcome to JustFun'),
+                country: String(acc.country || 'India'),
+                level: Number(acc.level || 0),
+                profileCompleted: Boolean(acc.profileCompleted ?? true),
+                createdAtMs: Number(acc.createdAtMs || Date.now()),
+              });
+              changed = true;
+            }
+          });
+          if (changed) {
+            saveDeviceAccountLedgerToDisk();
+          }
+        }
+        const authoritativeAccounts = getRegisteredAccountsForDeviceKeys(keys);
+        safeSend(ws, {
+          type: 'DEVICE_ACCOUNT_SLOTS_STATE',
+          maxAccounts: MAX_ACCOUNTS_PER_DEVICE,
+          usedAccounts: authoritativeAccounts.length,
+          accounts: authoritativeAccounts,
+        });
+        break;
+      }
+
       case 'REGISTER_USER': {
         const profile = msg.profile;
         if (!profile || !profile.userId) break;
         const uid = String(profile.userId);
+        const accountUid = String(profile.accountUid || uid);
+
+        const banCheck = isUserOrDeviceBanned(uid, msg.deviceIntegrity || null);
+        if (banCheck.banned) {
+          safeSend(ws, {
+            type: 'ACCOUNT_BANNED',
+            userId: uid,
+            reason: banCheck.reason,
+            bannedAtMs: Date.now(),
+          });
+          break;
+        }
+
+        if (msg.deviceIntegrity) {
+          const slotCheck = evaluateServerDeviceAccountSlot(
+            uid,
+            accountUid,
+            profile,
+            msg.deviceIntegrity
+          );
+          if (!slotCheck.allowed) {
+            safeSend(ws, {
+              type: 'DEVICE_ACCOUNT_LIMIT_BLOCKED',
+              maxAccounts: MAX_ACCOUNTS_PER_DEVICE,
+              usedAccounts: Array.isArray(slotCheck.allowedAccounts) ? slotCheck.allowedAccounts.length : MAX_ACCOUNTS_PER_DEVICE,
+              allowedAccounts: slotCheck.allowedAccounts || [],
+              error: slotCheck.error,
+            });
+            break;
+          }
+          safeSend(ws, {
+            type: 'DEVICE_ACCOUNT_SLOTS_STATE',
+            maxAccounts: MAX_ACCOUNTS_PER_DEVICE,
+            usedAccounts: Array.isArray(slotCheck.accounts) ? slotCheck.accounts.length : 0,
+            accounts: slotCheck.accounts || [],
+          });
+        }
+
         meta.userId = uid;
         addUserSocket(uid, ws);
+        safeSend(ws, buildDynamicCatalogPayload());
 
         const existing = users.get(uid) || {};
         const srvLevelState = userLevels.get(uid);
@@ -1769,6 +2599,7 @@ wss.on('connection', (ws) => {
           ...profile,
           userId: uid,
           user8DigitId: uid,
+          accountUid,
           level: srvLevelState ? srvLevelState.level : Number(profile.level ?? existing.level ?? 0),
           // Keep server-authoritative charm points if higher than client cache
           totalCharmPoints: Math.max(Number(existing.totalCharmPoints || 0), Number(profile.totalCharmPoints || 0)),
@@ -1870,16 +2701,63 @@ wss.on('connection', (ws) => {
         getOrCreateSet(userFollowing, fromUserId).add(targetUserId);
         getOrCreateSet(userFollowers, targetUserId).add(fromUserId);
 
-        pushSocialSyncToUser(fromUserId);
-        pushSocialSyncToUser(targetUserId);
-
         const followerProfile = users.get(fromUserId) || {};
+        const fromName = followerProfile.nickname || `User ${fromUserId}`;
+        const fromAvatarUri = followerProfile.avatarUri || '';
+        const nowMs = Date.now();
+
+        let alerts = userFollowAlerts.get(targetUserId);
+        if (!alerts) {
+          alerts = [];
+          userFollowAlerts.set(targetUserId, alerts);
+        }
+        alerts = [
+          {
+            fromUserId,
+            fromName,
+            fromAvatarUri,
+            timestampMs: nowMs,
+            isRead: false,
+          },
+          ...alerts.filter((a) => a.fromUserId !== fromUserId),
+        ].slice(0, 30);
+        userFollowAlerts.set(targetUserId, alerts);
+
+        const isNowMutual = Boolean(userFollowing.get(targetUserId)?.has(fromUserId));
+        pushSystemNotificationToUser(
+          targetUserId,
+          isNowMutual ? 'Mutual Follow Unlocked! 🎉' : 'New Follower 👋',
+          isNowMutual
+            ? `${fromName} followed you back! You can now send unlimited real-time messages to each other.`
+            : `${fromName} started following you! Follow back to unlock unlimited 1-on-1 chat.`,
+          'Say Hi'
+        );
+
         sendToUser(targetUserId, {
           type: 'FOLLOW_NOTIFICATION',
           fromUserId,
-          fromName: followerProfile.nickname || `User ${fromUserId}`,
-          fromAvatarUri: followerProfile.avatarUri || '',
+          fromName,
+          fromAvatarUri,
+          timestampMs: nowMs,
+          isMutualFollow: isNowMutual,
         });
+        sendToUser(fromUserId, {
+          type: 'FOLLOW_STATE_UPDATED',
+          peerUserId: targetUserId,
+          isFollowedByMe: true,
+          isFollowingMe: isNowMutual,
+          isMutualFollow: isNowMutual,
+        });
+        sendToUser(targetUserId, {
+          type: 'FOLLOW_STATE_UPDATED',
+          peerUserId: fromUserId,
+          isFollowedByMe: isNowMutual,
+          isFollowingMe: true,
+          isMutualFollow: isNowMutual,
+        });
+
+        pushSocialSyncToUser(fromUserId);
+        pushSocialSyncToUser(targetUserId);
         break;
       }
 
@@ -1890,6 +2768,22 @@ wss.on('connection', (ws) => {
 
         userFollowing.get(fromUserId)?.delete(targetUserId);
         userFollowers.get(targetUserId)?.delete(fromUserId);
+
+        const peerStillFollowsFrom = Boolean(userFollowing.get(targetUserId)?.has(fromUserId));
+        sendToUser(fromUserId, {
+          type: 'FOLLOW_STATE_UPDATED',
+          peerUserId: targetUserId,
+          isFollowedByMe: false,
+          isFollowingMe: peerStillFollowsFrom,
+          isMutualFollow: false,
+        });
+        sendToUser(targetUserId, {
+          type: 'FOLLOW_STATE_UPDATED',
+          peerUserId: fromUserId,
+          isFollowedByMe: peerStillFollowsFrom,
+          isFollowingMe: false,
+          isMutualFollow: false,
+        });
 
         pushSocialSyncToUser(fromUserId);
         pushSocialSyncToUser(targetUserId);
@@ -1905,6 +2799,20 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'DM_TYPING': {
+        const fromUserId = String(msg.fromUserId || meta.userId || '');
+        const toUserId = String(msg.toUserId || '');
+        if (!fromUserId || !toUserId || toUserId === '10000') break;
+        sendToUser(toUserId, {
+          type: 'DM_TYPING',
+          fromUserId,
+          toUserId,
+          isTyping: Boolean(msg.isTyping),
+          ts: Date.now(),
+        });
+        break;
+      }
+
       case 'SEND_DM': {
         const fromUserId = String(msg.fromUserId || meta.userId || '');
         const toUserId = String(msg.toUserId || '');
@@ -1913,39 +2821,71 @@ wss.on('connection', (ws) => {
         const hasMedia = Boolean(msg.audioBase64 || msg.imageBase64 || msg.giftName);
         if (!fromUserId || !toUserId || (!text.trim() && !hasMedia)) break;
 
-        // Enforce real block & DM privacy rules
-        const receiverBlocked = blockedUsers.get(toUserId);
-        const senderBlocked = blockedUsers.get(fromUserId);
-        if ((receiverBlocked && receiverBlocked.has(fromUserId)) || (senderBlocked && senderBlocked.has(toUserId))) {
-          safeSend(ws, {
-            type: 'DM_REJECTED',
-            peerUserId: toUserId,
-            reason: 'BLOCKED',
-          });
-          break;
-        }
-        if (userDmPrivacy.get(toUserId) === 'FOLLOWING' && !(userFollowing.get(toUserId)?.has(fromUserId))) {
-          safeSend(ws, {
-            type: 'DM_REJECTED',
-            peerUserId: toUserId,
-            reason: 'FOLLOWING_ONLY',
-          });
-          break;
-        }
-
-        const fromProfile = users.get(fromUserId) || {};
-        const toProfile = users.get(toUserId) || {};
-        const fromName = msg.fromName || fromProfile.nickname || `User ${fromUserId}`;
-        const fromAvatarUri = msg.fromAvatarUri || fromProfile.avatarUri || '';
-        const toName = msg.toName || toProfile.nickname || `User ${toUserId}`;
-        const toAvatarUri = msg.toAvatarUri || toProfile.avatarUri || '';
-
         const threadKey = getThreadKey(fromUserId, toUserId);
         let thread = dmThreads.get(threadKey);
         if (!thread) {
           thread = [];
           dmThreads.set(threadKey, thread);
         }
+
+        // Enforce real block, DM privacy & 5-Message Mutual Follow rules for user-to-user chat
+        if (toUserId !== '10000') {
+          const receiverBlocked = blockedUsers.get(toUserId);
+          const senderBlocked = blockedUsers.get(fromUserId);
+          if ((receiverBlocked && receiverBlocked.has(fromUserId)) || (senderBlocked && senderBlocked.has(toUserId))) {
+            safeSend(ws, {
+              type: 'DM_REJECTED',
+              peerUserId: toUserId,
+              reason: 'BLOCKED',
+              rejectedMessageId: String(msg.id || ''),
+              message: 'Cannot send message: user is blocked',
+            });
+            break;
+          }
+          if (userDmPrivacy.get(toUserId) === 'FOLLOWING' && !(userFollowing.get(toUserId)?.has(fromUserId))) {
+            safeSend(ws, {
+              type: 'DM_REJECTED',
+              peerUserId: toUserId,
+              reason: 'FOLLOWING_ONLY',
+              rejectedMessageId: String(msg.id || ''),
+              message: 'This user only accepts messages from people they follow',
+            });
+            break;
+          }
+
+          // Real-Time 5-Message Limit before Mutual Follow (Follow Back Required)
+          const iFollowPeer = Boolean(userFollowing.get(fromUserId)?.has(toUserId));
+          const peerFollowsMe = Boolean(userFollowing.get(toUserId)?.has(fromUserId));
+          const isMutualFollow = iFollowPeer && peerFollowsMe;
+          const sentBySenderCount = thread.filter(
+            (m) => m.fromUserId === fromUserId && !m.isRecalled
+          ).length;
+
+          if (!isMutualFollow && sentBySenderCount >= MAX_UNFOLLOWED_DM_MESSAGES) {
+            safeSend(ws, {
+              type: 'DM_REJECTED',
+              peerUserId: toUserId,
+              reason: 'FOLLOW_BACK_REQUIRED',
+              rejectedMessageId: String(msg.id || ''),
+              sentCount: sentBySenderCount,
+              maxAllowed: MAX_UNFOLLOWED_DM_MESSAGES,
+              iFollowPeer,
+              peerFollowsMe,
+              message: '5 message se jyada nahi jayega! Follow back ke baad hi message jayega.',
+            });
+            break;
+          }
+        }
+
+        const fromProfile = users.get(fromUserId) || {};
+        const toProfile =
+          toUserId === '10000'
+            ? { nickname: 'Customer service', avatarUri: '' }
+            : users.get(toUserId) || {};
+        const fromName = msg.fromName || fromProfile.nickname || `User ${fromUserId}`;
+        const fromAvatarUri = msg.fromAvatarUri || fromProfile.avatarUri || '';
+        const toName = msg.toName || toProfile.nickname || `User ${toUserId}`;
+        const toAvatarUri = msg.toAvatarUri || toProfile.avatarUri || '';
 
         const dmItem = {
           id: msg.id || `dm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1965,11 +2905,79 @@ wss.on('connection', (ws) => {
           giftCount: Number(msg.giftCount || 1),
           createdAtMs: Number(msg.createdAtMs || Date.now()),
           isRecalled: false,
+          isRead: toUserId === '10000',
+          deletedBy: [],
         };
         thread.push(dmItem);
         if (thread.length > 150) {
           thread = thread.slice(-100);
           dmThreads.set(threadKey, thread);
+        }
+
+        if (toUserId === '10000') {
+          sendToUser(fromUserId, { type: 'NEW_DM', peerUserId: '10000', message: dmItem });
+          pushSocialSyncToUser(fromUserId);
+          setTimeout(() => {
+            sendToUser(fromUserId, {
+              type: 'DM_TYPING',
+              fromUserId: '10000',
+              toUserId: fromUserId,
+              isTyping: true,
+              ts: Date.now(),
+            });
+          }, 250);
+          setTimeout(() => {
+            sendToUser(fromUserId, {
+              type: 'DM_TYPING',
+              fromUserId: '10000',
+              toUserId: fromUserId,
+              isTyping: false,
+              ts: Date.now(),
+            });
+            const lower = text.toLowerCase();
+            let csReply =
+              'Hello! Just Fun Official Support here. How can we assist you with your account, coins, voice room, or friends today?';
+            if (lower.includes('follow') || lower.includes('message') || lower.includes('5')) {
+              csReply =
+                'Chat Rule: Bina mutual follow (Follow Back) ke aap kisi user ko maximum 5 messages bhej sakte hain. Jab dono ek dusre ko follow kar lenge, tab unlimited real-time messages bhej sakte hain!';
+            } else if (lower.includes('coin') || lower.includes('recharge') || lower.includes('wallet') || lower.includes('diamond')) {
+              csReply =
+                'Wallet Support: Coins recharge aur Diamond exchange real-time server se sync hote hain. Aap Me -> Wallet me ja kar apna balance aur transaction history dekh sakte hain.';
+            } else if (lower.includes('invite') || lower.includes('code') || lower.includes('refer')) {
+              csReply =
+                'Invite Rewards: Apने dosto ko apna 8-digit ID code share karein! Har valid friend invite par 250,000 Coins tak milte hain.';
+            } else if (lower.includes('id') || lower.includes('account') || lower.includes('login')) {
+              csReply =
+                'Account Security: Ek phone me maximum 3 IDs banayi ja sakti hain. Aapki teeno IDs hamesha safe rehti hain.';
+            }
+            const replyItem = {
+              id: `dm_cs_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              fromUserId: '10000',
+              fromName: 'Customer service',
+              fromAvatarUri: '',
+              toUserId: fromUserId,
+              toName: fromName,
+              toAvatarUri: fromAvatarUri,
+              text: csReply,
+              msgType: 'TEXT',
+              voiceDurationSec: 0,
+              audioBase64: '',
+              imageBase64: '',
+              giftName: '',
+              giftIcon: '',
+              giftCount: 1,
+              createdAtMs: Date.now(),
+              isRecalled: false,
+              isRead: true,
+              deletedBy: [],
+            };
+            const curThread = dmThreads.get(threadKey) || [];
+            curThread.push(replyItem);
+            dmThreads.set(threadKey, curThread);
+            sendToUser(fromUserId, { type: 'NEW_DM', peerUserId: '10000', message: replyItem });
+            pushSocialSyncToUser(fromUserId);
+          }, 1050);
+          break;
         }
 
         // Increment unread counter for recipient
@@ -1989,6 +2997,25 @@ wss.on('connection', (ws) => {
         if (!userId || !peerUserId) break;
         dmUnreadCounts.set(`${userId}:${peerUserId}`, 0);
         dmThreads.delete(getThreadKey(userId, peerUserId));
+        pushSocialSyncToUser(userId);
+        break;
+      }
+
+      case 'DELETE_DM_MESSAGE': {
+        const userId = String(msg.userId || meta.userId || '');
+        const peerUserId = String(msg.peerUserId || '');
+        const msgId = String(msg.msgId || '');
+        if (!userId || !peerUserId || !msgId) break;
+        const thread = dmThreads.get(getThreadKey(userId, peerUserId));
+        if (thread) {
+          for (const item of thread) {
+            if (item.id === msgId) {
+              if (!Array.isArray(item.deletedBy)) item.deletedBy = [];
+              if (!item.deletedBy.includes(userId)) item.deletedBy.push(userId);
+            }
+          }
+        }
+        sendToUser(userId, { type: 'DM_MESSAGE_DELETED', peerUserId, msgId });
         pushSocialSyncToUser(userId);
         break;
       }
@@ -2059,6 +3086,8 @@ wss.on('connection', (ws) => {
             }
           }
         }
+        sendToUser(userId, { type: 'DM_RECALLED', peerUserId, msgId });
+        sendToUser(peerUserId, { type: 'DM_RECALLED', peerUserId: userId, msgId });
         pushSocialSyncToUser(userId);
         pushSocialSyncToUser(peerUserId);
         break;
@@ -2069,6 +3098,36 @@ wss.on('connection', (ws) => {
         const peerUserId = String(msg.peerUserId || '');
         if (!userId || !peerUserId) break;
         dmUnreadCounts.set(`${userId}:${peerUserId}`, 0);
+        const thread = dmThreads.get(getThreadKey(userId, peerUserId));
+        let markedAny = false;
+        if (thread) {
+          for (const item of thread) {
+            if (item.toUserId === userId && !item.isRead) {
+              item.isRead = true;
+              markedAny = true;
+            }
+          }
+        }
+        if (markedAny && peerUserId !== '10000') {
+          sendToUser(peerUserId, {
+            type: 'DM_READ_RECEIPT',
+            peerUserId: userId,
+            readerUserId: userId,
+            readAtMs: Date.now(),
+          });
+          pushSocialSyncToUser(peerUserId);
+        }
+        pushSocialSyncToUser(userId);
+        break;
+      }
+
+      case 'MARK_SYSTEM_NOTICES_READ': {
+        const userId = String(msg.userId || meta.userId || '');
+        if (!userId) break;
+        const notices = getOrInitSystemNotices(userId);
+        for (const n of notices) n.isRead = true;
+        const alerts = userFollowAlerts.get(userId) || [];
+        for (const a of alerts) a.isRead = true;
         pushSocialSyncToUser(userId);
         break;
       }
