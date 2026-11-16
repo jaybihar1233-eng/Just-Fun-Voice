@@ -35,6 +35,105 @@ try {
   }
 }
 
+function getLocalCloudinaryConfig() {
+  const cleanVal = (v) =>
+    String(v || '')
+      .trim()
+      .replace(/^['"]+|['"]+$/g, '')
+      .trim();
+
+  let cloudName = cleanVal(process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUD_NAME);
+  let apiKey = cleanVal(process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || process.env.API_KEY);
+  let apiSecret = cleanVal(
+    process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || process.env.API_SECRET
+  );
+
+  let rawUrl = cleanVal(process.env.CLOUDINARY_URL);
+  if (rawUrl.toUpperCase().startsWith('CLOUDINARY_URL=')) {
+    rawUrl = cleanVal(rawUrl.slice('CLOUDINARY_URL='.length));
+  }
+  if (!rawUrl && cloudName.startsWith('cloudinary://')) {
+    rawUrl = cloudName;
+    cloudName = '';
+  }
+  if (rawUrl.startsWith('cloudinary://')) {
+    try {
+      const parsed = new URL(rawUrl);
+      if (!cloudName && parsed.hostname) cloudName = decodeURIComponent(parsed.hostname);
+      if (!apiKey && parsed.username) apiKey = decodeURIComponent(parsed.username);
+      if (!apiSecret && parsed.password) apiSecret = decodeURIComponent(parsed.password);
+    } catch (_) {}
+  }
+  const baseFolder =
+    cleanVal(process.env.CLOUDINARY_UPLOAD_FOLDER || 'justfun/gifts').replace(/^\/+|\/+$/g, '') ||
+    'justfun/gifts';
+  return {
+    configured: Boolean(cloudName && apiKey && apiSecret),
+    cloudName,
+    apiKey,
+    apiSecret,
+    baseFolder,
+  };
+}
+
+function signCloudinaryUploadLocal({ kind = 'video' } = {}) {
+  if (firestoreStore && typeof firestoreStore.signCloudinaryUpload === 'function') {
+    return firestoreStore.signCloudinaryUpload({ kind });
+  }
+  const cfg = getLocalCloudinaryConfig();
+  if (!cfg.configured) {
+    throw new Error(
+      'Cloudinary is not configured on the server. Please set CLOUDINARY_URL (or CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET) in environment variables.'
+    );
+  }
+  const isVideo = String(kind).toLowerCase() === 'video';
+  const resourceType = isVideo ? 'video' : 'image';
+  const folder = isVideo ? `${cfg.baseFolder}/videos` : `${cfg.baseFolder}/icons`;
+  const publicId = crypto.randomUUID();
+  const timestamp = Math.floor(Date.now() / 1000);
+  const paramsToSign = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}`;
+  const signature = crypto
+    .createHash('sha1')
+    .update(paramsToSign + cfg.apiSecret)
+    .digest('hex');
+  return {
+    cloudName: cfg.cloudName,
+    apiKey: cfg.apiKey,
+    timestamp,
+    signature,
+    folder,
+    publicId,
+    resourceType,
+    uploadUrl: `https://api.cloudinary.com/v1_1/${encodeURIComponent(cfg.cloudName)}/${resourceType}/upload`,
+  };
+}
+
+async function uploadMediaToCloudinaryLocal({ buffer, kind = 'video', contentType }) {
+  if (firestoreStore && typeof firestoreStore.uploadMediaToCloudinary === 'function') {
+    return firestoreStore.uploadMediaToCloudinary({ buffer, kind, contentType });
+  }
+  const sign = signCloudinaryUploadLocal({ kind });
+  const form = new FormData();
+  const ext = sign.resourceType === 'video' ? 'mp4' : 'png';
+  const mime = contentType || (sign.resourceType === 'video' ? 'video/mp4' : 'image/png');
+  form.append('file', new Blob([buffer], { type: mime }), `${sign.publicId}.${ext}`);
+  form.append('api_key', sign.apiKey);
+  form.append('timestamp', String(sign.timestamp));
+  form.append('signature', sign.signature);
+  form.append('folder', sign.folder);
+  form.append('public_id', sign.publicId);
+
+  const response = await fetch(sign.uploadUrl, { method: 'POST', body: form });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.error) {
+    throw new Error(data?.error?.message || `Cloudinary upload failed (HTTP ${response.status})`);
+  }
+  return {
+    downloadUrl: data.secure_url || data.url,
+    publicId: data.public_id,
+    resourceType: sign.resourceType,
+  };
+}
 const PORT = process.env.PORT || 8080;
 
 const app = express();
@@ -2805,6 +2904,12 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
   <div class="toast" id="toast"></div>
 
   <script>
+    function getSecret() {
+      const el = document.getElementById('adminKey');
+      return el ? el.value.trim() : 'justfun-admin-2026';
+    }
+    var secret = 'justfun-admin-2026';
+
     function showToast(msg, isErr = false) {
       const el = document.getElementById('toast');
       el.textContent = msg;
@@ -2822,12 +2927,14 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
     }
 
     async function api(path, method = 'GET', body = null) {
-      const key = document.getElementById('adminKey').value.trim();
+      const key = getSecret();
+      secret = key;
       const opts = {
         method,
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-key': key
+          'x-admin-key': key,
+          'x-admin-secret': key
         }
       };
       if (body) opts.body = JSON.stringify(body);
@@ -3351,11 +3458,20 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
 // Standalone Web Admin Dashboard (/admin and /admin.html)
 app.get(['/admin', '/admin.html'], (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.status(200).send(EMBEDDED_ADMIN_HTML);
 });
 
 function requireAdminAuth(req, res, next) {
-  const key = String(req.headers['x-admin-key'] || req.query.key || '').trim();
+  const key = String(
+    req.headers['x-admin-key'] ||
+      req.headers['x-admin-secret'] ||
+      req.query.key ||
+      req.query.secret ||
+      ''
+  ).trim();
   if (key !== ADMIN_SECRET) {
     return res.status(401).json({ error: 'Invalid Admin Secret Key!' });
   }
@@ -3539,7 +3655,7 @@ app.post('/api/admin/wallet/packs', requireAdminAuth, (req, res) => {
 app.post('/api/admin/cloudinary/sign', requireAdminAuth, (req, res) => {
   try {
     const kind = String(req.body?.kind || req.query?.kind || 'video').toLowerCase() === 'icon' ? 'icon' : 'video';
-    const signed = firestoreStore.signCloudinaryUpload({ kind });
+    const signed = signCloudinaryUploadLocal({ kind });
     res.json({ ok: true, ...signed });
   } catch (err) {
     console.error('[AdminCloudinarySign]', err);
@@ -3560,7 +3676,7 @@ app.put(
       }
       const isVideo = kind === 'video';
       const contentType = isVideo ? 'video/mp4' : (req.headers['content-type'] || 'image/png');
-      const uploaded = await firestoreStore.uploadMediaToCloudinary({
+      const uploaded = await uploadMediaToCloudinaryLocal({
         buffer,
         kind,
         contentType,

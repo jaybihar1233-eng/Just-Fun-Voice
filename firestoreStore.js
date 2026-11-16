@@ -702,10 +702,26 @@ async function hydrateFromCloud() {
 }
 
 function getCloudinaryConfig() {
-  let cloudName = String(process.env.CLOUDINARY_CLOUD_NAME || '').trim();
-  let apiKey = String(process.env.CLOUDINARY_API_KEY || '').trim();
-  let apiSecret = String(process.env.CLOUDINARY_API_SECRET || '').trim();
-  const rawUrl = String(process.env.CLOUDINARY_URL || '').trim();
+  const cleanVal = (v) =>
+    String(v || '')
+      .trim()
+      .replace(/^['"]+|['"]+$/g, '')
+      .trim();
+
+  let cloudName = cleanVal(process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUD_NAME);
+  let apiKey = cleanVal(process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || process.env.API_KEY);
+  let apiSecret = cleanVal(
+    process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || process.env.API_SECRET
+  );
+
+  let rawUrl = cleanVal(process.env.CLOUDINARY_URL);
+  if (rawUrl.toUpperCase().startsWith('CLOUDINARY_URL=')) {
+    rawUrl = cleanVal(rawUrl.slice('CLOUDINARY_URL='.length));
+  }
+  if (!rawUrl && cloudName.startsWith('cloudinary://')) {
+    rawUrl = cloudName;
+    cloudName = '';
+  }
   if (rawUrl.startsWith('cloudinary://')) {
     try {
       const parsed = new URL(rawUrl);
@@ -714,9 +730,9 @@ function getCloudinaryConfig() {
       if (!apiSecret && parsed.password) apiSecret = decodeURIComponent(parsed.password);
     } catch (_) {}
   }
-  const baseFolder = String(process.env.CLOUDINARY_UPLOAD_FOLDER || 'justfun/gifts')
-    .trim()
-    .replace(/^\/+|\/+$/g, '') || 'justfun/gifts';
+  const baseFolder =
+    cleanVal(process.env.CLOUDINARY_UPLOAD_FOLDER || 'justfun/gifts').replace(/^\/+|\/+$/g, '') ||
+    'justfun/gifts';
   return {
     configured: Boolean(cloudName && apiKey && apiSecret),
     cloudName,
