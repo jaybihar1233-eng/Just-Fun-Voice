@@ -5,8 +5,6 @@ const crypto = require('crypto');
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0479270201';
 const FIRESTORE_DATABASE_ID =
   process.env.FIRESTORE_DATABASE_ID || 'ai-studio-android-justfun-265e983a-5bb7-41e8-ad50-4de63df92ee4';
-const FIREBASE_STORAGE_BUCKET =
-  process.env.FIREBASE_STORAGE_BUCKET || 'gen-lang-client-0479270201.firebasestorage.app';
 const LOCAL_SNAPSHOT_FILE = path.join(__dirname, '.justfun_runtime_state.json');
 
 let db = null;
@@ -88,7 +86,6 @@ function initFirestoreClient() {
             ? adminApp.cert(serviceAccount)
             : adminApp.applicationDefault(),
           projectId: serviceAccount?.project_id || FIREBASE_PROJECT_ID,
-          storageBucket: FIREBASE_STORAGE_BUCKET,
         });
 
     db = adminFirestore.getFirestore(app, FIRESTORE_DATABASE_ID);
@@ -704,57 +701,89 @@ async function hydrateFromCloud() {
   }
 }
 
-async function uploadMediaToFirebaseStorage({ buffer, objectPath, contentType }) {
-  const client = initFirestoreClient();
-  if (!client) {
+function getCloudinaryConfig() {
+  let cloudName = String(process.env.CLOUDINARY_CLOUD_NAME || '').trim();
+  let apiKey = String(process.env.CLOUDINARY_API_KEY || '').trim();
+  let apiSecret = String(process.env.CLOUDINARY_API_SECRET || '').trim();
+  const rawUrl = String(process.env.CLOUDINARY_URL || '').trim();
+  if (rawUrl.startsWith('cloudinary://')) {
+    try {
+      const parsed = new URL(rawUrl);
+      if (!cloudName && parsed.hostname) cloudName = decodeURIComponent(parsed.hostname);
+      if (!apiKey && parsed.username) apiKey = decodeURIComponent(parsed.username);
+      if (!apiSecret && parsed.password) apiSecret = decodeURIComponent(parsed.password);
+    } catch (_) {}
+  }
+  const baseFolder = String(process.env.CLOUDINARY_UPLOAD_FOLDER || 'justfun/gifts')
+    .trim()
+    .replace(/^\/+|\/+$/g, '') || 'justfun/gifts';
+  return {
+    configured: Boolean(cloudName && apiKey && apiSecret),
+    cloudName,
+    apiKey,
+    apiSecret,
+    baseFolder,
+  };
+}
+
+function signCloudinaryUpload({ kind = 'video' } = {}) {
+  const cfg = getCloudinaryConfig();
+  if (!cfg.configured) {
     throw new Error(
-      firestoreInitError || 'Firebase Admin is not configured yet (set FIREBASE_SERVICE_ACCOUNT_JSON on server).'
+      'Cloudinary is not configured on the server. Please set CLOUDINARY_URL (or CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET) in environment variables.'
     );
   }
-  const adminApp = require('firebase-admin/app');
-  const adminStorage = require('firebase-admin/storage');
-  const app = adminApp.getApp();
-  const storage = adminStorage.getStorage(app);
+  const isVideo = String(kind).toLowerCase() === 'video';
+  const resourceType = isVideo ? 'video' : 'image';
+  const folder = isVideo ? `${cfg.baseFolder}/videos` : `${cfg.baseFolder}/icons`;
+  const publicId = crypto.randomUUID();
+  const timestamp = Math.floor(Date.now() / 1000);
 
-  const candidateBuckets = Array.from(
-    new Set([
-      FIREBASE_STORAGE_BUCKET,
-      `${FIREBASE_PROJECT_ID}.firebasestorage.app`,
-      `${FIREBASE_PROJECT_ID}.appspot.com`,
-    ].filter(Boolean))
-  );
+  // Cloudinary SHA-1 signature requires alphabetical ordering of signed params
+  const paramsToSign = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}`;
+  const signature = crypto
+    .createHash('sha1')
+    .update(paramsToSign + cfg.apiSecret)
+    .digest('hex');
 
-  const downloadToken = crypto.randomUUID();
-  let lastErr = null;
+  return {
+    cloudName: cfg.cloudName,
+    apiKey: cfg.apiKey,
+    timestamp,
+    signature,
+    folder,
+    publicId,
+    resourceType,
+    uploadUrl: `https://api.cloudinary.com/v1_1/${encodeURIComponent(cfg.cloudName)}/${resourceType}/upload`,
+  };
+}
 
-  for (const bucketName of candidateBuckets) {
-    try {
-      const bucket = storage.bucket(bucketName);
-      const file = bucket.file(objectPath);
-      await file.save(buffer, {
-        resumable: false,
-        metadata: {
-          contentType: contentType || 'application/octet-stream',
-          cacheControl: 'public, max-age=31536000',
-          metadata: {
-            firebaseStorageDownloadTokens: downloadToken,
-          },
-        },
-      });
-      const encodedPath = encodeURIComponent(objectPath);
-      const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodedPath}?alt=media&token=${downloadToken}`;
-      return { downloadUrl, bucketName, objectPath };
-    } catch (err) {
-      lastErr = err;
-      const msg = String(err?.message || '');
-      // Try next bucket naming convention only if the bucket itself does not exist
-      if (err?.code === 404 || msg.includes('does not exist')) {
-        continue;
-      }
-      throw err;
-    }
+async function uploadMediaToCloudinary({ buffer, kind = 'video', contentType }) {
+  const sign = signCloudinaryUpload({ kind });
+  const form = new FormData();
+  const ext = sign.resourceType === 'video' ? 'mp4' : 'png';
+  const mime = contentType || (sign.resourceType === 'video' ? 'video/mp4' : 'image/png');
+  form.append('file', new Blob([buffer], { type: mime }), `${sign.publicId}.${ext}`);
+  form.append('api_key', sign.apiKey);
+  form.append('timestamp', String(sign.timestamp));
+  form.append('signature', sign.signature);
+  form.append('folder', sign.folder);
+  form.append('public_id', sign.publicId);
+
+  const response = await fetch(sign.uploadUrl, {
+    method: 'POST',
+    body: form,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.error) {
+    const msg = data?.error?.message || `Cloudinary upload failed (HTTP ${response.status})`;
+    throw new Error(msg);
   }
-  throw lastErr || new Error('Unable to upload file to Firebase Storage bucket.');
+  return {
+    downloadUrl: data.secure_url || data.url,
+    publicId: data.public_id,
+    resourceType: sign.resourceType,
+  };
 }
 
 async function saveGiftToFirestoreCollection({
@@ -798,11 +827,13 @@ async function deleteGiftFromFirestoreCollection(giftId) {
 }
 
 function getStatus() {
+  const cloudCfg = getCloudinaryConfig();
   return {
     firestoreConnected: firestoreEnabled,
     projectId: FIREBASE_PROJECT_ID,
     databaseId: FIRESTORE_DATABASE_ID,
-    storageBucket: FIREBASE_STORAGE_BUCKET,
+    cloudinaryConfigured: cloudCfg.configured,
+    cloudinaryCloudName: cloudCfg.configured ? cloudCfg.cloudName : '',
     note: firestoreEnabled ? 'Active (Batch Write-Behind)' : firestoreInitError,
     pendingFlushCount:
       dirtyUsers.size + dirtyRooms.size + dirtyDevices.size + dirtyDms.size + (dirtyGlobal ? 1 : 0),
@@ -818,7 +849,8 @@ module.exports = {
   markDeviceDirty,
   markDmDirty,
   markGlobalDirty,
-  uploadMediaToFirebaseStorage,
+  signCloudinaryUpload,
+  uploadMediaToCloudinary,
   saveGiftToFirestoreCollection,
   deleteGiftFromFirestoreCollection,
   getStatus,

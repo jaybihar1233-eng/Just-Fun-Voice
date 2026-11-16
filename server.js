@@ -22,7 +22,8 @@ try {
       markDeviceDirty: () => {},
       markDmDirty: () => {},
       markGlobalDirty: () => {},
-      uploadMediaToFirebaseStorage: async () => { throw new Error('firestoreStore.js missing'); },
+      signCloudinaryUpload: () => { throw new Error('firestoreStore.js missing'); },
+      uploadMediaToCloudinary: async () => { throw new Error('firestoreStore.js missing'); },
       saveGiftToFirestoreCollection: async () => { throw new Error('firestoreStore.js missing'); },
       deleteGiftFromFirestoreCollection: async () => {},
       getStatus: () => ({
@@ -2549,7 +2550,7 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
 
       <section class="panel" id="panel-gifts">
         <div class="card" style="border-color: rgba(25,204,157,0.45); background: linear-gradient(145deg, #151c28, #13222d);">
-          <h3>🎬 Upload New MP4 Gift (Phone / PC Gallery → Firebase Storage & Firestore)</h3>
+          <h3>🎬 Upload New MP4 Gift (Phone / PC Gallery → Cloudinary & Firestore)</h3>
           <div class="form-grid">
             <input id="mp4GiftName" placeholder="Gift Name (e.g. Royal Dragon)" />
             <input id="mp4GiftPrice" type="number" min="1" placeholder="Price in Coins (Int, e.g. 5000)" />
@@ -3073,12 +3074,18 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
       if (btn.disabled) btn.textContent = '⏳ Uploading... ' + clamped + '%';
     }
 
-    function uploadBinaryWithProgress(url, file, contentType, onFraction) {
+    function uploadDirectToCloudinary(sign, file, onFraction) {
       return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('api_key', sign.apiKey);
+        formData.append('timestamp', String(sign.timestamp));
+        formData.append('signature', sign.signature);
+        formData.append('folder', sign.folder);
+        formData.append('public_id', sign.publicId);
+
         const xhr = new XMLHttpRequest();
-        xhr.open('PUT', url, true);
-        xhr.setRequestHeader('x-admin-secret', getSecret());
-        xhr.setRequestHeader('Content-Type', contentType || 'application/octet-stream');
+        xhr.open('POST', sign.uploadUrl, true);
         xhr.upload.onprogress = function(ev) {
           if (ev.lengthComputable && ev.total > 0) {
             onFraction(ev.loaded / ev.total);
@@ -3087,19 +3094,19 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
         xhr.onload = function() {
           try {
             const data = JSON.parse(xhr.responseText || '{}');
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(data);
+            if (xhr.status >= 200 && xhr.status < 300 && (data.secure_url || data.url)) {
+              resolve(data.secure_url || data.url);
             } else {
-              reject(new Error(data.error || ('Upload HTTP ' + xhr.status)));
+              reject(new Error((data.error && data.error.message) || ('Cloudinary HTTP ' + xhr.status)));
             }
           } catch (err) {
-            reject(new Error('Upload failed (HTTP ' + xhr.status + ')'));
+            reject(new Error('Cloudinary upload failed (HTTP ' + xhr.status + ')'));
           }
         };
         xhr.onerror = function() {
-          reject(new Error('Network error while uploading file'));
+          reject(new Error('Network error while uploading directly to Cloudinary'));
         };
-        xhr.send(file);
+        xhr.send(formData);
       });
     }
 
@@ -3124,36 +3131,36 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
       thumbBtn.disabled = true;
 
       try {
-        setMp4UploadProgress(1, 'Uploading MP4 video to Firebase Storage...');
-        const videoRes = await uploadBinaryWithProgress(
-          '/api/admin/storage/upload?kind=video',
+        setMp4UploadProgress(1, 'Preparing direct Cloudinary video upload...');
+        const videoSign = await api('/api/admin/cloudinary/sign', 'POST', { kind: 'video' });
+        const videoUrl = await uploadDirectToCloudinary(
+          videoSign,
           videoFile,
-          'video/mp4',
-          (f) => setMp4UploadProgress(f * 75, 'Uploading MP4 video to Firebase Storage...')
+          (f) => setMp4UploadProgress(2 + f * 73, 'Uploading MP4 video directly to Cloudinary...')
         );
 
-        setMp4UploadProgress(76, 'Uploading Thumbnail icon to Firebase Storage...');
-        const iconRes = await uploadBinaryWithProgress(
-          '/api/admin/storage/upload?kind=icon',
+        setMp4UploadProgress(76, 'Preparing direct Cloudinary thumbnail upload...');
+        const iconSign = await api('/api/admin/cloudinary/sign', 'POST', { kind: 'icon' });
+        const iconUrl = await uploadDirectToCloudinary(
+          iconSign,
           thumbFile,
-          thumbFile.type || 'image/png',
-          (f) => setMp4UploadProgress(75 + f * 17, 'Uploading Thumbnail icon to Firebase Storage...')
+          (f) => setMp4UploadProgress(76 + f * 16, 'Uploading Thumbnail icon directly to Cloudinary...')
         );
 
-        setMp4UploadProgress(95, 'Saving gift document to Firestore gifts collection...');
+        setMp4UploadProgress(94, 'Saving Cloudinary gift URLs to database...');
         await api('/api/admin/gifts/upload-save', 'POST', {
           name,
           price,
           category,
           tag,
-          videoUrl: videoRes.downloadUrl,
-          iconUrl: iconRes.downloadUrl,
+          videoUrl,
+          iconUrl,
           type: 'mp4',
           durationSeconds: 5.5
         });
 
-        setMp4UploadProgress(100, 'Gift uploaded & saved to Firestore!');
-        showToast('Gift "' + name + '" uploaded to Firebase Storage & saved to Firestore!');
+        setMp4UploadProgress(100, 'Gift uploaded to Cloudinary & saved!');
+        showToast('Gift "' + name + '" uploaded to Cloudinary & saved!');
         document.getElementById('mp4GiftName').value = '';
         document.getElementById('mp4GiftPrice').value = '';
         document.getElementById('mp4VideoFile').value = '';
@@ -3529,31 +3536,39 @@ app.post('/api/admin/wallet/packs', requireAdminAuth, (req, res) => {
   res.json({ ok: true, rechargePacks: WALLET_RECHARGE_PACKS });
 });
 
+app.post('/api/admin/cloudinary/sign', requireAdminAuth, (req, res) => {
+  try {
+    const kind = String(req.body?.kind || req.query?.kind || 'video').toLowerCase() === 'icon' ? 'icon' : 'video';
+    const signed = firestoreStore.signCloudinaryUpload({ kind });
+    res.json({ ok: true, ...signed });
+  } catch (err) {
+    console.error('[AdminCloudinarySign]', err);
+    res.status(500).json({ error: err.message || 'Cloudinary sign failed' });
+  }
+});
+
 app.put(
   '/api/admin/storage/upload',
   requireAdminAuth,
   express.raw({ type: ['video/mp4', 'image/*', 'application/octet-stream'], limit: '65mb' }),
   async (req, res) => {
     try {
-      const kind = String(req.query.kind || 'video').toLowerCase();
+      const kind = String(req.query.kind || 'video').toLowerCase() === 'icon' ? 'icon' : 'video';
       const buffer = req.body;
       if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
         return res.status(400).json({ error: 'Empty file upload body' });
       }
       const isVideo = kind === 'video';
-      const objectPath = isVideo
-        ? `gifts/videos/${crypto.randomUUID()}.mp4`
-        : `gifts/icons/${crypto.randomUUID()}.png`;
       const contentType = isVideo ? 'video/mp4' : (req.headers['content-type'] || 'image/png');
-      const uploaded = await firestoreStore.uploadMediaToFirebaseStorage({
+      const uploaded = await firestoreStore.uploadMediaToCloudinary({
         buffer,
-        objectPath,
+        kind,
         contentType,
       });
       res.json({ ok: true, ...uploaded });
     } catch (err) {
-      console.error('[AdminStorageUpload]', err);
-      res.status(500).json({ error: err.message || 'Firebase Storage upload failed' });
+      console.error('[AdminCloudinaryUpload]', err);
+      res.status(500).json({ error: err.message || 'Cloudinary upload failed' });
     }
   }
 );
@@ -3572,17 +3587,28 @@ app.post('/api/admin/gifts/upload-save', requireAdminAuth, async (req, res) => {
     if (!name) return res.status(400).json({ error: 'Gift name is required' });
     if (!videoUrl || !iconUrl) return res.status(400).json({ error: 'Both videoUrl and iconUrl are required' });
 
-    const savedDoc = await firestoreStore.saveGiftToFirestoreCollection({
-      giftId: id,
-      name,
-      price,
-      videoUrl,
-      iconUrl,
-      category,
-      tag,
-      type,
-      active: true,
-    });
+    let savedDoc = null;
+    let firestoreWarning = '';
+    try {
+      savedDoc = await firestoreStore.saveGiftToFirestoreCollection({
+        giftId: id,
+        name,
+        price,
+        videoUrl,
+        iconUrl,
+        category,
+        tag,
+        type,
+        active: true,
+      });
+    } catch (fsErr) {
+      if (!firestoreStore.getStatus().firestoreConnected) {
+        firestoreWarning = fsErr.message || 'Firestore standby';
+        console.warn('[AdminSaveMp4Gift] Firestore standby, saved to catalog + snapshot:', firestoreWarning);
+      } else {
+        throw fsErr;
+      }
+    }
 
     const gift = {
       id,
@@ -3600,10 +3626,10 @@ app.post('/api/admin/gifts/upload-save', requireAdminAuth, async (req, res) => {
     giftsCustomizedByAdmin = true;
     broadcastDynamicCatalog();
     firestoreStore.markGlobalDirty();
-    res.json({ ok: true, gift, firestoreDoc: savedDoc });
+    res.json({ ok: true, gift, firestoreDoc: savedDoc, warning: firestoreWarning || undefined });
   } catch (err) {
     console.error('[AdminSaveMp4Gift]', err);
-    res.status(500).json({ error: err.message || 'Failed to save gift to Firestore' });
+    res.status(500).json({ error: err.message || 'Failed to save gift to database' });
   }
 });
 
