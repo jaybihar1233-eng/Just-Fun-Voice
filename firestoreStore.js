@@ -1,9 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0479270201';
 const FIRESTORE_DATABASE_ID =
   process.env.FIRESTORE_DATABASE_ID || 'ai-studio-android-justfun-265e983a-5bb7-41e8-ad50-4de63df92ee4';
+const FIREBASE_STORAGE_BUCKET =
+  process.env.FIREBASE_STORAGE_BUCKET || 'gen-lang-client-0479270201.firebasestorage.app';
 const LOCAL_SNAPSHOT_FILE = path.join(__dirname, '.justfun_runtime_state.json');
 
 let db = null;
@@ -85,6 +88,7 @@ function initFirestoreClient() {
             ? adminApp.cert(serviceAccount)
             : adminApp.applicationDefault(),
           projectId: serviceAccount?.project_id || FIREBASE_PROJECT_ID,
+          storageBucket: FIREBASE_STORAGE_BUCKET,
         });
 
     db = adminFirestore.getFirestore(app, FIRESTORE_DATABASE_ID);
@@ -700,11 +704,105 @@ async function hydrateFromCloud() {
   }
 }
 
+async function uploadMediaToFirebaseStorage({ buffer, objectPath, contentType }) {
+  const client = initFirestoreClient();
+  if (!client) {
+    throw new Error(
+      firestoreInitError || 'Firebase Admin is not configured yet (set FIREBASE_SERVICE_ACCOUNT_JSON on server).'
+    );
+  }
+  const adminApp = require('firebase-admin/app');
+  const adminStorage = require('firebase-admin/storage');
+  const app = adminApp.getApp();
+  const storage = adminStorage.getStorage(app);
+
+  const candidateBuckets = Array.from(
+    new Set([
+      FIREBASE_STORAGE_BUCKET,
+      `${FIREBASE_PROJECT_ID}.firebasestorage.app`,
+      `${FIREBASE_PROJECT_ID}.appspot.com`,
+    ].filter(Boolean))
+  );
+
+  const downloadToken = crypto.randomUUID();
+  let lastErr = null;
+
+  for (const bucketName of candidateBuckets) {
+    try {
+      const bucket = storage.bucket(bucketName);
+      const file = bucket.file(objectPath);
+      await file.save(buffer, {
+        resumable: false,
+        metadata: {
+          contentType: contentType || 'application/octet-stream',
+          cacheControl: 'public, max-age=31536000',
+          metadata: {
+            firebaseStorageDownloadTokens: downloadToken,
+          },
+        },
+      });
+      const encodedPath = encodeURIComponent(objectPath);
+      const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodedPath}?alt=media&token=${downloadToken}`;
+      return { downloadUrl, bucketName, objectPath };
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err?.message || '');
+      // Try next bucket naming convention only if the bucket itself does not exist
+      if (err?.code === 404 || msg.includes('does not exist')) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr || new Error('Unable to upload file to Firebase Storage bucket.');
+}
+
+async function saveGiftToFirestoreCollection({
+  giftId,
+  name,
+  price,
+  videoUrl,
+  iconUrl,
+  category = 'Gifts',
+  tag = 'MP4',
+  type = 'mp4',
+  active = true,
+}) {
+  const client = initFirestoreClient();
+  if (!client) {
+    throw new Error(
+      firestoreInitError || 'Firestore is not configured yet (set FIREBASE_SERVICE_ACCOUNT_JSON on server).'
+    );
+  }
+  const adminFirestore = require('firebase-admin/firestore');
+  const docId = String(giftId || `g_${Date.now()}`).trim();
+  const payload = {
+    name: String(name || '').trim(),
+    price: Math.max(1, Math.floor(Number(price || 10))),
+    videoUrl: String(videoUrl || '').trim(),
+    iconUrl: String(iconUrl || '').trim(),
+    type: String(type || 'mp4'),
+    category: String(category || 'Gifts').trim() || 'Gifts',
+    tag: String(tag || 'MP4').trim() || 'MP4',
+    active: active !== false,
+    createdAt: adminFirestore.FieldValue.serverTimestamp(),
+  };
+  await client.collection('gifts').doc(docId).set(payload, { merge: true });
+  return { id: docId, ...payload };
+}
+
+async function deleteGiftFromFirestoreCollection(giftId) {
+  const client = initFirestoreClient();
+  if (!client || !giftId) return;
+  await client.collection('gifts').doc(String(giftId)).delete().catch(() => {});
+}
+
 function getStatus() {
   return {
     firestoreConnected: firestoreEnabled,
     projectId: FIREBASE_PROJECT_ID,
     databaseId: FIRESTORE_DATABASE_ID,
+    storageBucket: FIREBASE_STORAGE_BUCKET,
     note: firestoreEnabled ? 'Active (Batch Write-Behind)' : firestoreInitError,
     pendingFlushCount:
       dirtyUsers.size + dirtyRooms.size + dirtyDevices.size + dirtyDms.size + (dirtyGlobal ? 1 : 0),
@@ -720,5 +818,8 @@ module.exports = {
   markDeviceDirty,
   markDmDirty,
   markGlobalDirty,
+  uploadMediaToFirebaseStorage,
+  saveGiftToFirestoreCollection,
+  deleteGiftFromFirestoreCollection,
   getStatus,
 };

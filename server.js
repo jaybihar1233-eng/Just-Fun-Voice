@@ -22,6 +22,9 @@ try {
       markDeviceDirty: () => {},
       markDmDirty: () => {},
       markGlobalDirty: () => {},
+      uploadMediaToFirebaseStorage: async () => { throw new Error('firestoreStore.js missing'); },
+      saveGiftToFirestoreCollection: async () => { throw new Error('firestoreStore.js missing'); },
+      deleteGiftFromFirestoreCollection: async () => {},
       getStatus: () => ({
         enabled: false,
         mode: 'standby_missing_module',
@@ -2545,6 +2548,62 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
       </section>
 
       <section class="panel" id="panel-gifts">
+        <div class="card" style="border-color: rgba(25,204,157,0.45); background: linear-gradient(145deg, #151c28, #13222d);">
+          <h3>🎬 Upload New MP4 Gift (Phone / PC Gallery → Firebase Storage & Firestore)</h3>
+          <div class="form-grid">
+            <input id="mp4GiftName" placeholder="Gift Name (e.g. Royal Dragon)" />
+            <input id="mp4GiftPrice" type="number" min="1" placeholder="Price in Coins (Int, e.g. 5000)" />
+            <select id="mp4GiftCategory">
+              <option value="Gifts">Gifts</option>
+              <option value="Customized">Customized</option>
+              <option value="Lucky">Lucky</option>
+              <option value="Popular">Popular</option>
+              <option value="Luxury">Luxury</option>
+              <option value="CP">CP</option>
+            </select>
+            <input id="mp4GiftTag" placeholder="Badge Tag (MP4 / HOT / VIP)" value="MP4" />
+          </div>
+
+          <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+            <div style="flex:1; min-width:240px; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px;">
+              <input type="file" id="mp4VideoFile" accept="video/mp4" style="display:none;" onchange="onMp4VideoSelected(this)" />
+              <button type="button" id="btnSelectMp4Video" onclick="document.getElementById('mp4VideoFile').click()" style="width:100%; background:#1f3348; color:#4de8c0; border:1px solid #19cc9d;">
+                🎥 Select MP4 Video
+              </button>
+              <div id="mp4VideoFileName" style="margin-top:8px; font-size:12px; color:var(--muted); word-break:break-all;">
+                No MP4 video selected yet (MIME: video/mp4)
+              </div>
+            </div>
+
+            <div style="flex:1; min-width:240px; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px; display:flex; align-items:center; gap:12px;">
+              <img id="mp4ThumbPreview" src="" alt="" style="display:none; width:48px; height:48px; object-fit:cover; border-radius:10px; border:1px solid var(--gold); flex-shrink:0;" />
+              <div style="flex:1; min-width:0;">
+                <input type="file" id="mp4ThumbFile" accept="image/*" style="display:none;" onchange="onMp4ThumbSelected(this)" />
+                <button type="button" id="btnSelectThumbIcon" onclick="document.getElementById('mp4ThumbFile').click()" style="width:100%; background:#2b2618; color:#ffc83d; border:1px solid #ffc83d;">
+                  🖼️ Select Thumbnail Icon
+                </button>
+                <div id="mp4ThumbFileName" style="margin-top:8px; font-size:12px; color:var(--muted); word-break:break-all;">
+                  No thumbnail icon selected yet (image/*)
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="mp4ProgressWrap" style="display:none; margin-bottom:14px; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:13px;">
+              <span id="mp4ProgressStage" style="color:#d6ddf7; font-weight:600;">Preparing upload...</span>
+              <span id="mp4ProgressPct" style="color:var(--accent); font-weight:800;">0%</span>
+            </div>
+            <div style="width:100%; height:10px; background:#1c2536; border-radius:8px; overflow:hidden;">
+              <div id="mp4ProgressFill" style="width:0%; height:100%; background:linear-gradient(90deg, #19cc9d, #4e6fff); transition:width 0.15s ease;"></div>
+            </div>
+          </div>
+
+          <button type="button" id="btnUploadSaveMp4Gift" onclick="uploadAndSaveMp4Gift()" style="width:100%; padding:13px 18px; font-size:15px;">
+            ☁️ Upload &amp; Save Gift
+          </button>
+        </div>
+
         <div class="card">
           <h3>🎁 Add or Update Gift via API (Loads Directly in App Without APK Update)</h3>
           <div class="form-grid">
@@ -2974,6 +3033,144 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
       } catch (e) { showToast(e.message, true); }
     }
 
+    function onMp4VideoSelected(input) {
+      const f = input.files && input.files[0];
+      const label = document.getElementById('mp4VideoFileName');
+      if (!f) {
+        label.textContent = 'No MP4 video selected yet (MIME: video/mp4)';
+        label.style.color = 'var(--muted)';
+        return;
+      }
+      const mb = (f.size / (1024 * 1024)).toFixed(2);
+      label.textContent = '✅ Selected: ' + f.name + ' (' + mb + ' MB)';
+      label.style.color = 'var(--accent)';
+    }
+
+    function onMp4ThumbSelected(input) {
+      const f = input.files && input.files[0];
+      const label = document.getElementById('mp4ThumbFileName');
+      const preview = document.getElementById('mp4ThumbPreview');
+      if (!f) {
+        label.textContent = 'No thumbnail icon selected yet (image/*)';
+        label.style.color = 'var(--muted)';
+        preview.style.display = 'none';
+        preview.src = '';
+        return;
+      }
+      label.textContent = '✅ Selected: ' + f.name;
+      label.style.color = 'var(--gold)';
+      preview.src = URL.createObjectURL(f);
+      preview.style.display = 'block';
+    }
+
+    function setMp4UploadProgress(pct, stageText) {
+      const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+      document.getElementById('mp4ProgressWrap').style.display = 'block';
+      document.getElementById('mp4ProgressPct').textContent = clamped + '%';
+      document.getElementById('mp4ProgressStage').textContent = stageText || 'Uploading...';
+      document.getElementById('mp4ProgressFill').style.width = clamped + '%';
+      const btn = document.getElementById('btnUploadSaveMp4Gift');
+      if (btn.disabled) btn.textContent = '⏳ Uploading... ' + clamped + '%';
+    }
+
+    function uploadBinaryWithProgress(url, file, contentType, onFraction) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', url, true);
+        xhr.setRequestHeader('x-admin-secret', getSecret());
+        xhr.setRequestHeader('Content-Type', contentType || 'application/octet-stream');
+        xhr.upload.onprogress = function(ev) {
+          if (ev.lengthComputable && ev.total > 0) {
+            onFraction(ev.loaded / ev.total);
+          }
+        };
+        xhr.onload = function() {
+          try {
+            const data = JSON.parse(xhr.responseText || '{}');
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(data);
+            } else {
+              reject(new Error(data.error || ('Upload HTTP ' + xhr.status)));
+            }
+          } catch (err) {
+            reject(new Error('Upload failed (HTTP ' + xhr.status + ')'));
+          }
+        };
+        xhr.onerror = function() {
+          reject(new Error('Network error while uploading file'));
+        };
+        xhr.send(file);
+      });
+    }
+
+    async function uploadAndSaveMp4Gift() {
+      const name = document.getElementById('mp4GiftName').value.trim();
+      const price = Math.floor(Number(document.getElementById('mp4GiftPrice').value || 0));
+      const category = document.getElementById('mp4GiftCategory').value || 'Gifts';
+      const tag = document.getElementById('mp4GiftTag').value.trim() || 'MP4';
+      const videoFile = document.getElementById('mp4VideoFile').files[0];
+      const thumbFile = document.getElementById('mp4ThumbFile').files[0];
+
+      if (!name) return showToast('Please enter Gift Name', true);
+      if (!price || price <= 0) return showToast('Please enter a valid Coin Price (Int)', true);
+      if (!videoFile) return showToast('Please select an MP4 Video', true);
+      if (!thumbFile) return showToast('Please select a Thumbnail Icon', true);
+
+      const submitBtn = document.getElementById('btnUploadSaveMp4Gift');
+      const vidBtn = document.getElementById('btnSelectMp4Video');
+      const thumbBtn = document.getElementById('btnSelectThumbIcon');
+      submitBtn.disabled = true;
+      vidBtn.disabled = true;
+      thumbBtn.disabled = true;
+
+      try {
+        setMp4UploadProgress(1, 'Uploading MP4 video to Firebase Storage...');
+        const videoRes = await uploadBinaryWithProgress(
+          '/api/admin/storage/upload?kind=video',
+          videoFile,
+          'video/mp4',
+          (f) => setMp4UploadProgress(f * 75, 'Uploading MP4 video to Firebase Storage...')
+        );
+
+        setMp4UploadProgress(76, 'Uploading Thumbnail icon to Firebase Storage...');
+        const iconRes = await uploadBinaryWithProgress(
+          '/api/admin/storage/upload?kind=icon',
+          thumbFile,
+          thumbFile.type || 'image/png',
+          (f) => setMp4UploadProgress(75 + f * 17, 'Uploading Thumbnail icon to Firebase Storage...')
+        );
+
+        setMp4UploadProgress(95, 'Saving gift document to Firestore gifts collection...');
+        await api('/api/admin/gifts/upload-save', 'POST', {
+          name,
+          price,
+          category,
+          tag,
+          videoUrl: videoRes.downloadUrl,
+          iconUrl: iconRes.downloadUrl,
+          type: 'mp4',
+          durationSeconds: 5.5
+        });
+
+        setMp4UploadProgress(100, 'Gift uploaded & saved to Firestore!');
+        showToast('Gift "' + name + '" uploaded to Firebase Storage & saved to Firestore!');
+        document.getElementById('mp4GiftName').value = '';
+        document.getElementById('mp4GiftPrice').value = '';
+        document.getElementById('mp4VideoFile').value = '';
+        document.getElementById('mp4ThumbFile').value = '';
+        onMp4VideoSelected(document.getElementById('mp4VideoFile'));
+        onMp4ThumbSelected(document.getElementById('mp4ThumbFile'));
+        loadAll();
+      } catch (e) {
+        showToast('Upload failed: ' + e.message, true);
+      } finally {
+        submitBtn.disabled = false;
+        vidBtn.disabled = false;
+        thumbBtn.disabled = false;
+        submitBtn.textContent = '☁️ Upload & Save Gift';
+      }
+    }
+
     async function deleteGift(id) {
       try {
         await api('/api/admin/gifts/' + encodeURIComponent(id), 'DELETE');
@@ -3332,6 +3529,84 @@ app.post('/api/admin/wallet/packs', requireAdminAuth, (req, res) => {
   res.json({ ok: true, rechargePacks: WALLET_RECHARGE_PACKS });
 });
 
+app.put(
+  '/api/admin/storage/upload',
+  requireAdminAuth,
+  express.raw({ type: ['video/mp4', 'image/*', 'application/octet-stream'], limit: '65mb' }),
+  async (req, res) => {
+    try {
+      const kind = String(req.query.kind || 'video').toLowerCase();
+      const buffer = req.body;
+      if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+        return res.status(400).json({ error: 'Empty file upload body' });
+      }
+      const isVideo = kind === 'video';
+      const objectPath = isVideo
+        ? `gifts/videos/${crypto.randomUUID()}.mp4`
+        : `gifts/icons/${crypto.randomUUID()}.png`;
+      const contentType = isVideo ? 'video/mp4' : (req.headers['content-type'] || 'image/png');
+      const uploaded = await firestoreStore.uploadMediaToFirebaseStorage({
+        buffer,
+        objectPath,
+        contentType,
+      });
+      res.json({ ok: true, ...uploaded });
+    } catch (err) {
+      console.error('[AdminStorageUpload]', err);
+      res.status(500).json({ error: err.message || 'Firebase Storage upload failed' });
+    }
+  }
+);
+
+app.post('/api/admin/gifts/upload-save', requireAdminAuth, async (req, res) => {
+  try {
+    const id = String(req.body.id || `g_mp4_${Date.now()}`).trim();
+    const name = String(req.body.name || '').trim();
+    const price = Math.max(1, Math.floor(Number(req.body.price || req.body.priceCoins || 10)));
+    const videoUrl = String(req.body.videoUrl || '').trim();
+    const iconUrl = String(req.body.iconUrl || '').trim();
+    const type = String(req.body.type || 'mp4').trim() || 'mp4';
+    const category = String(req.body.category || 'Gifts').trim() || 'Gifts';
+    const tag = String(req.body.tag || 'MP4').trim() || 'MP4';
+    const durationSeconds = Math.max(1, Number(req.body.durationSeconds || 5.5));
+    if (!name) return res.status(400).json({ error: 'Gift name is required' });
+    if (!videoUrl || !iconUrl) return res.status(400).json({ error: 'Both videoUrl and iconUrl are required' });
+
+    const savedDoc = await firestoreStore.saveGiftToFirestoreCollection({
+      giftId: id,
+      name,
+      price,
+      videoUrl,
+      iconUrl,
+      category,
+      tag,
+      type,
+      active: true,
+    });
+
+    const gift = {
+      id,
+      name,
+      icon: iconUrl,
+      priceCoins: price,
+      tag,
+      category,
+      animationUrl: videoUrl,
+      durationSeconds,
+      type,
+      active: true,
+    };
+    DYNAMIC_GIFTS_CATALOG.set(id, gift);
+    giftsCustomizedByAdmin = true;
+    broadcastDynamicCatalog();
+    firestoreStore.markGlobalDirty();
+    res.json({ ok: true, gift, firestoreDoc: savedDoc });
+  } catch (err) {
+    console.error('[AdminSaveMp4Gift]', err);
+    res.status(500).json({ error: err.message || 'Failed to save gift to Firestore' });
+  }
+});
+
 app.post('/api/admin/gifts', requireAdminAuth, (req, res) => {
   const id = String(req.body.id || `g_${Date.now()}`).trim();
   const name = String(req.body.name || '').trim();
@@ -3351,12 +3626,13 @@ app.post('/api/admin/gifts', requireAdminAuth, (req, res) => {
   res.json({ ok: true, gift });
 });
 
-app.delete('/api/admin/gifts/:id', requireAdminAuth, (req, res) => {
+app.delete('/api/admin/gifts/:id', requireAdminAuth, async (req, res) => {
   const id = String(req.params.id || '').trim();
   DYNAMIC_GIFTS_CATALOG.delete(id);
   giftsCustomizedByAdmin = true;
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
+  await firestoreStore.deleteGiftFromFirestoreCollection(id);
   res.json({ ok: true, deletedId: id });
 });
 
