@@ -5,7 +5,31 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
-const firestoreStore = require('./firestoreStore');
+let firestoreStore;
+try {
+  firestoreStore = require('./firestoreStore');
+} catch (err) {
+  try {
+    firestoreStore = require('./backend/firestoreStore');
+  } catch (_) {
+    console.warn('[Server] firestoreStore.js missing in deploy directory — running in standby fallback mode.');
+    firestoreStore = {
+      bindStateRefs: () => {},
+      hydrateFromCloud: async () => {},
+      flushDirtyState: async () => {},
+      markUserDirty: () => {},
+      markRoomDirty: () => {},
+      markDeviceDirty: () => {},
+      markDmDirty: () => {},
+      markGlobalDirty: () => {},
+      getStatus: () => ({
+        enabled: false,
+        mode: 'standby_missing_module',
+        error: 'firestoreStore.js file not uploaded alongside server.js yet',
+      }),
+    };
+  }
+}
 
 const PORT = process.env.PORT || 8080;
 
