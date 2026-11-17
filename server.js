@@ -3742,6 +3742,7 @@ app.post('/api/admin/gifts/upload-save', requireAdminAuth, async (req, res) => {
         category,
         tag,
         type,
+        durationSeconds,
         active: true,
       });
     } catch (fsErr) {
@@ -3769,6 +3770,7 @@ app.post('/api/admin/gifts/upload-save', requireAdminAuth, async (req, res) => {
     giftsCustomizedByAdmin = true;
     broadcastDynamicCatalog();
     firestoreStore.markGlobalDirty();
+    firestoreStore.flushDirtyState().catch(() => {});
     res.json({ ok: true, gift, firestoreDoc: savedDoc, warning: firestoreWarning || undefined });
   } catch (err) {
     console.error('[AdminSaveMp4Gift]', err);
@@ -3776,23 +3778,56 @@ app.post('/api/admin/gifts/upload-save', requireAdminAuth, async (req, res) => {
   }
 });
 
-app.post('/api/admin/gifts', requireAdminAuth, (req, res) => {
-  const id = String(req.body.id || `g_${Date.now()}`).trim();
-  const name = String(req.body.name || '').trim();
-  const priceCoins = Math.max(1, Math.floor(Number(req.body.priceCoins || 10)));
-  const category = String(req.body.category || 'Popular').trim();
-  const tag = String(req.body.tag || 'HOT').trim();
-  const icon = String(req.body.icon || '🎁').trim();
-  const animationUrl = String(req.body.animationUrl || '').trim();
-  const durationSeconds = Math.max(1, Number(req.body.durationSeconds || 3.0));
-  const active = req.body.active !== false;
-  if (!name) return res.status(400).json({ error: 'Gift name is required' });
-  const gift = { id, name, icon, priceCoins, tag, category, animationUrl, durationSeconds, active };
-  DYNAMIC_GIFTS_CATALOG.set(id, gift);
-  giftsCustomizedByAdmin = true;
-  broadcastDynamicCatalog();
-  firestoreStore.markGlobalDirty();
-  res.json({ ok: true, gift });
+app.post('/api/admin/gifts', requireAdminAuth, async (req, res) => {
+  try {
+    const id = String(req.body.id || `g_${Date.now()}`).trim();
+    const name = String(req.body.name || '').trim();
+    const priceCoins = Math.max(1, Math.floor(Number(req.body.priceCoins || 10)));
+    const category = String(req.body.category || 'Popular').trim();
+    const tag = String(req.body.tag || 'HOT').trim();
+    const icon = String(req.body.icon || '🎁').trim();
+    const animationUrl = String(req.body.animationUrl || '').trim();
+    const durationSeconds = Math.max(1, Number(req.body.durationSeconds || 3.0));
+    const active = req.body.active !== false;
+    const type = String(req.body.type || (animationUrl.toLowerCase().includes('.mp4') ? 'mp4' : 'standard')).trim();
+    if (!name) return res.status(400).json({ error: 'Gift name is required' });
+
+    let savedDoc = null;
+    let firestoreWarning = '';
+    try {
+      savedDoc = await firestoreStore.saveGiftToFirestoreCollection({
+        giftId: id,
+        name,
+        price: priceCoins,
+        videoUrl: animationUrl,
+        iconUrl: icon,
+        category,
+        tag,
+        type,
+        durationSeconds,
+        active,
+      });
+    } catch (fsErr) {
+      if (!firestoreStore.getStatus().firestoreConnected) {
+        firestoreWarning = fsErr.message || 'Firestore standby';
+        console.warn('[AdminSaveGift] Firestore standby, saved to catalog + snapshot:', firestoreWarning);
+      } else {
+        console.warn('[AdminSaveGift] Firestore collection save warning:', fsErr.message);
+        firestoreWarning = fsErr.message || 'Firestore collection warning';
+      }
+    }
+
+    const gift = { id, name, icon, priceCoins, tag, category, animationUrl, durationSeconds, type, active };
+    DYNAMIC_GIFTS_CATALOG.set(id, gift);
+    giftsCustomizedByAdmin = true;
+    broadcastDynamicCatalog();
+    firestoreStore.markGlobalDirty();
+    firestoreStore.flushDirtyState().catch(() => {});
+    res.json({ ok: true, gift, firestoreDoc: savedDoc, warning: firestoreWarning || undefined });
+  } catch (err) {
+    console.error('[AdminSaveGift]', err);
+    res.status(500).json({ error: err.message || 'Failed to save gift' });
+  }
 });
 
 app.delete('/api/admin/gifts/:id', requireAdminAuth, async (req, res) => {
@@ -3802,6 +3837,7 @@ app.delete('/api/admin/gifts/:id', requireAdminAuth, async (req, res) => {
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
   await firestoreStore.deleteGiftFromFirestoreCollection(id);
+  firestoreStore.flushDirtyState().catch(() => {});
   res.json({ ok: true, deletedId: id });
 });
 
@@ -5365,6 +5401,14 @@ wss.on('connection', (ws, req) => {
         const { roomId, clearedAtMs } = msg;
         const room = rooms.get(roomId);
         if (!room) break;
+        const actorId = String(meta.userId || msg.userId || '').trim();
+        const isHostOrAdmin = Boolean(
+          actorId &&
+          (room.id === actorId ||
+            room.hostId === actorId ||
+            (room.adminUsers || []).some((a) => a && String(a.userId || '') === actorId))
+        );
+        if (!isHostOrAdmin) break;
         room.chatClearedAt = clearedAtMs || Date.now();
         room.messages = [];
         firestoreStore.markRoomDirty(room.id);
@@ -6751,6 +6795,30 @@ firestoreStore.bindStateRefs({
       }
       if (typeof doc.rules.dailyCheckInCoins === 'number') DAILY_CHECKIN_REWARD_COINS = doc.rules.dailyCheckInCoins;
     }
+  },
+  applyHydratedGiftsCollection: (giftDocs) => {
+    if (!Array.isArray(giftDocs) || giftDocs.length === 0) return;
+    giftDocs.forEach((doc) => {
+      if (!doc || !doc.id || !doc.name) return;
+      const cleanId = String(doc.id).trim();
+      const videoUrl = String(doc.videoUrl || '').trim();
+      const isLegacyBuiltIn = LEGACY_BUILTIN_GIFT_IDS.has(cleanId) && !videoUrl;
+      if (isLegacyBuiltIn) return;
+      const existing = DYNAMIC_GIFTS_CATALOG.get(cleanId) || {};
+      DYNAMIC_GIFTS_CATALOG.set(cleanId, {
+        id: cleanId,
+        name: String(doc.name).trim(),
+        icon: String(doc.iconUrl || existing.icon || '🎁').trim() || '🎁',
+        priceCoins: Math.max(1, Math.floor(Number(doc.price || existing.priceCoins || 10))),
+        tag: String(doc.tag || existing.tag || (String(doc.type || '').toLowerCase() === 'mp4' ? 'MP4' : 'HOT')).trim(),
+        category: String(doc.category || existing.category || 'Gifts').trim() || 'Gifts',
+        animationUrl: videoUrl || existing.animationUrl || '',
+        durationSeconds: Math.max(1, Number(doc.durationSeconds || existing.durationSeconds || (videoUrl ? 5.5 : 3.0))),
+        type: String(doc.type || existing.type || (videoUrl ? 'mp4' : 'standard')).trim(),
+        active: doc.active !== false,
+      });
+    });
+    giftsCustomizedByAdmin = true;
   },
 });
 
