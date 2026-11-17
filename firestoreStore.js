@@ -354,18 +354,24 @@ function serializeGlobalDoc() {
   const r = stateRefs;
   const stripLb = (map) =>
     Array.from(map.values())
-      .filter((e) => Number(e.winCoins || 0) > 0)
-      .sort((a, b) => Number(b.winCoins || 0) - Number(a.winCoins || 0))
-      .slice(0, 30)
-      .map((e) => ({
-        userId: e.userId,
-        userName: e.userName,
-        winCoins: Number(e.winCoins || 0),
-        avatarUri: e.avatarUri && String(e.avatarUri).startsWith('http') ? e.avatarUri : '',
-      }));
+      .filter((e) => Number((e.coinsPlay ?? e.winCoins) || 0) > 0)
+      .sort((a, b) => Number((b.coinsPlay ?? b.winCoins) || 0) - Number((a.coinsPlay ?? a.winCoins) || 0))
+      .slice(0, 50)
+      .map((e) => {
+        const coinsPlay = Number((e.coinsPlay ?? e.winCoins) || 0);
+        return {
+          userId: e.userId,
+          userName: e.userName,
+          coinsPlay,
+          winCoins: coinsPlay,
+          avatarUri: e.avatarUri && String(e.avatarUri).startsWith('http') ? e.avatarUri : '',
+        };
+      });
 
   return {
     greedyDayIndex: Number(r.getGreedyDayIndex()),
+    greedyTodayJackpotPool: Number(r.getGreedyTodayJackpotPool ? r.getGreedyTodayJackpotPool() : 0),
+    greedyYesterdayJackpotPool: Number(r.getGreedyYesterdayJackpotPool ? r.getGreedyYesterdayJackpotPool() : 0),
     greedyTodayLeaderboard: stripLb(r.getGreedyTodayLeaderboard()),
     greedyYesterdayLeaderboard: stripLb(r.getGreedyYesterdayLeaderboard()),
     dynamicGifts: Array.from(r.DYNAMIC_GIFTS_CATALOG.values()),
@@ -645,12 +651,13 @@ async function hydrateFromCloud() {
   if (!stateRefs) return;
   if (db && firestoreEnabled) {
     try {
-      const [usersSnap, roomsSnap, devSnap, dmSnap, globalSnap] = await Promise.all([
+      const [usersSnap, roomsSnap, devSnap, dmSnap, globalSnap, giftsSnap] = await Promise.all([
         db.collection('users').get(),
         db.collection('rooms').get(),
         db.collection('device_locks').get(),
         db.collection('dm_threads').get(),
         db.collection('app_config').doc('global_state').get(),
+        db.collection('gifts').get(),
       ]);
 
       usersSnap.forEach((d) => applyHydratedUser(d.data()));
@@ -663,8 +670,15 @@ async function hydrateFromCloud() {
         }
       });
       if (globalSnap.exists) applyHydratedGlobal(globalSnap.data());
+      if (giftsSnap && typeof stateRefs.applyHydratedGiftsCollection === 'function') {
+        const giftDocs = [];
+        giftsSnap.forEach((d) => {
+          giftDocs.push({ id: d.id, ...(d.data() || {}) });
+        });
+        stateRefs.applyHydratedGiftsCollection(giftDocs);
+      }
       console.log(
-        `[FirestoreStore] Hydrated from Firestore: ${usersSnap.size} users, ${roomsSnap.size} rooms, ${devSnap.size} device locks, ${dmSnap.size} DM threads`
+        `[FirestoreStore] Hydrated from Firestore: ${usersSnap.size} users, ${roomsSnap.size} rooms, ${devSnap.size} device locks, ${dmSnap.size} DM threads, ${giftsSnap.size} gifts`
       );
       return;
     } catch (err) {
@@ -811,6 +825,7 @@ async function saveGiftToFirestoreCollection({
   category = 'Gifts',
   tag = 'MP4',
   type = 'mp4',
+  durationSeconds = 3.0,
   active = true,
 }) {
   const client = initFirestoreClient();
@@ -829,6 +844,7 @@ async function saveGiftToFirestoreCollection({
     type: String(type || 'mp4'),
     category: String(category || 'Gifts').trim() || 'Gifts',
     tag: String(tag || 'MP4').trim() || 'MP4',
+    durationSeconds: Math.max(1, Number(durationSeconds || 3.0)),
     active: active !== false,
     createdAt: adminFirestore.FieldValue.serverTimestamp(),
   };

@@ -440,19 +440,67 @@ function pruneStoreOrderCache(nowMs = Date.now()) {
     }
   }
 }
-let greedyDayIndex = Math.floor(Date.now() / 86400000);
-let greedyTodayLeaderboard = new Map(); // Map<userId, { userId, userName, avatarUri, winCoins }>
+const GREEDY_JACKPOT_SHARE_PCTS = [50, 22, 10, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1];
+const GREEDY_IST_OFFSET_MS = 19800000;
+
+function getGreedyDayIndexIst(nowMs = Date.now()) {
+  return Math.floor((nowMs + GREEDY_IST_OFFSET_MS) / 86400000);
+}
+
+function getGreedyNextResetAtMs(dayIdx = getGreedyDayIndexIst()) {
+  return (dayIdx + 1) * 86400000 - GREEDY_IST_OFFSET_MS;
+}
+
+let greedyDayIndex = getGreedyDayIndexIst();
+let greedyTodayJackpotPool = 0;
+let greedyYesterdayJackpotPool = 0;
+let greedyTodayLeaderboard = new Map(); // Map<userId, { userId, userName, avatarUri, coinsPlay, winCoins }>
 let greedyYesterdayLeaderboard = new Map();
 
+function getGreedyEntryCoinsPlay(e) {
+  return Math.max(0, Number((e && (e.coinsPlay ?? e.winCoins)) || 0));
+}
+
+function distributeGreedyJackpotRewards(lbMap, poolCoins) {
+  const pool = Math.floor(Number(poolCoins || 0));
+  if (pool <= 0 || !lbMap || lbMap.size === 0) return;
+  const sorted = Array.from(lbMap.values())
+    .filter((e) => getGreedyEntryCoinsPlay(e) > 0)
+    .sort((a, b) => getGreedyEntryCoinsPlay(b) - getGreedyEntryCoinsPlay(a))
+    .slice(0, 15);
+  sorted.forEach((entry, idx) => {
+    const pct = GREEDY_JACKPOT_SHARE_PCTS[idx] || 0;
+    const reward = Math.floor((pool * pct) / 100);
+    if (reward > 0 && entry.userId) {
+      const prevBal = getOrInitGreedyBalance(entry.userId);
+      greedyUserBalances.set(entry.userId, prevBal + reward);
+      recordWalletTx(
+        entry.userId,
+        'GREEDY_JACKPOT',
+        `Ranking Jackpot #${idx + 1} (${pct}%)`,
+        `+${reward} Gold Coins`,
+        true,
+        `greedy_jp_${greedyDayIndex}_${idx + 1}_${entry.userId}`
+      );
+      pushWalletSyncToUser(entry.userId);
+      firestoreStore.markUserDirty(entry.userId);
+    }
+  });
+}
+
 function ensureGreedyDayFresh() {
-  const curDay = Math.floor(Date.now() / 86400000);
+  const curDay = getGreedyDayIndexIst();
   if (curDay !== greedyDayIndex) {
+    distributeGreedyJackpotRewards(greedyTodayLeaderboard, greedyTodayJackpotPool);
     if (curDay === greedyDayIndex + 1) {
       greedyYesterdayLeaderboard = greedyTodayLeaderboard;
+      greedyYesterdayJackpotPool = greedyTodayJackpotPool;
     } else {
       greedyYesterdayLeaderboard = new Map();
+      greedyYesterdayJackpotPool = 0;
     }
     greedyTodayLeaderboard = new Map();
+    greedyTodayJackpotPool = 0;
     greedyDayIndex = curDay;
     firestoreStore.markGlobalDirty();
   }
@@ -638,16 +686,50 @@ function computeGreedySlotTotals(roundNumber) {
 
 function formatGreedyLeaderboard(map, limit = 15) {
   return Array.from(map.values())
-    .filter((e) => Number(e.winCoins || 0) > 0)
-    .sort((a, b) => Number(b.winCoins || 0) - Number(a.winCoins || 0))
+    .filter((e) => getGreedyEntryCoinsPlay(e) > 0)
+    .sort((a, b) => getGreedyEntryCoinsPlay(b) - getGreedyEntryCoinsPlay(a))
     .slice(0, limit)
-    .map((e, idx) => ({
-      rank: idx + 1,
-      userId: e.userId,
-      userName: e.userName || `User ${e.userId}`,
-      avatarUri: resolveLiveUserAvatar(e.userId, e.avatarUri || ''),
-      winCoins: Number(e.winCoins || 0),
-    }));
+    .map((e, idx) => {
+      const userProf = users.get(e.userId) || {};
+      const coinsPlay = getGreedyEntryCoinsPlay(e);
+      return {
+        rank: idx + 1,
+        userId: e.userId,
+        userName: userProf.nickname || e.userName || `User ${e.userId}`,
+        avatarUri: resolveLiveUserAvatar(e.userId, e.avatarUri || ''),
+        coinsPlay,
+        winCoins: coinsPlay,
+      };
+    });
+}
+
+function computeMyGreedyRank(map, uid) {
+  if (!uid) return { rank: 0, coinsPlay: 0 };
+  const sorted = Array.from(map.values())
+    .filter((e) => getGreedyEntryCoinsPlay(e) > 0)
+    .sort((a, b) => getGreedyEntryCoinsPlay(b) - getGreedyEntryCoinsPlay(a));
+  const idx = sorted.findIndex((e) => e.userId === uid);
+  if (idx < 0) {
+    return { rank: 0, coinsPlay: 0 };
+  }
+  return {
+    rank: idx + 1,
+    coinsPlay: getGreedyEntryCoinsPlay(sorted[idx]),
+  };
+}
+
+function buildGreedyRankState(uid) {
+  ensureGreedyDayFresh();
+  return {
+    todayJackpotPool: Math.floor(Number(greedyTodayJackpotPool || 0)),
+    yesterdayJackpotPool: Math.floor(Number(greedyYesterdayJackpotPool || 0)),
+    nextResetAtMs: getGreedyNextResetAtMs(greedyDayIndex),
+    serverNowMs: Date.now(),
+    todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard, 15),
+    yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard, 15),
+    myTodayRank: computeMyGreedyRank(greedyTodayLeaderboard, uid),
+    myYesterdayRank: computeMyGreedyRank(greedyYesterdayLeaderboard, uid),
+  };
 }
 
 function computeAndCacheGreedySettlement(roundNumber) {
@@ -661,6 +743,7 @@ function computeAndCacheGreedySettlement(roundNumber) {
   const allWinners = [];
   const userWinAmountsById = {};
   const userBetTotalsById = {};
+  let totalRoundWager = 0;
   let anyPersistentChange = false;
 
   if (bettors) {
@@ -670,6 +753,7 @@ function computeAndCacheGreedySettlement(roundNumber) {
         betTotal += Number(b.slotBets[s] || 0);
       }
       userBetTotalsById[b.userId] = betTotal;
+      totalRoundWager += betTotal;
       if (betTotal > 0) {
         firestoreStore.markUserDirty(b.userId);
         anyPersistentChange = true;
@@ -697,15 +781,15 @@ function computeAndCacheGreedySettlement(roundNumber) {
           avatarUri: avatar,
           winAmount,
         });
-        const prevLb = greedyTodayLeaderboard.get(b.userId);
-        greedyTodayLeaderboard.set(b.userId, {
-          userId: b.userId,
-          userName: name,
-          avatarUri: avatar && String(avatar).startsWith('http') ? avatar : '',
-          winCoins: Number(prevLb?.winCoins || 0) + winAmount,
-        });
       }
     }
+  }
+
+  if (totalRoundWager > 0) {
+    // 5% of total coins wagered in each round grows the live Global Ranking Jackpot Pool
+    const poolIncrement = Math.max(10, Math.floor(totalRoundWager * 0.05));
+    greedyTodayJackpotPool = Math.floor(Number(greedyTodayJackpotPool || 0)) + poolIncrement;
+    anyPersistentChange = true;
   }
 
   if (anyPersistentChange) {
@@ -727,6 +811,9 @@ function computeAndCacheGreedySettlement(roundNumber) {
     topWinners,
     userWinAmountsById,
     userBetTotalsById,
+    todayJackpotPool: Math.floor(Number(greedyTodayJackpotPool || 0)),
+    yesterdayJackpotPool: Math.floor(Number(greedyYesterdayJackpotPool || 0)),
+    nextResetAtMs: getGreedyNextResetAtMs(greedyDayIndex),
     todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard, 15),
     yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard, 15),
     completedHistory: getGreedyResultHistory(roundNumber),
@@ -749,9 +836,14 @@ function buildGreedyPerUserOutcomePayload(type, roundNumber, userId, clientSentE
     serverNowMs: Date.now(),
     clientSentElapsedMs: Number(clientSentElapsedMs || 0),
   };
-  // Omit bulky leaderboards during 30s DRAW_REVEAL; send capped Today leaderboard only on SETTLEMENT
+  // Omit bulky leaderboards during 30s DRAW_REVEAL; send capped Today leaderboard & Jackpot Pool on SETTLEMENT
   if (type === 'GREEDY_SETTLEMENT') {
     payload.todayRankList = cached.todayRankList;
+    payload.todayJackpotPool = cached.todayJackpotPool;
+    payload.yesterdayJackpotPool = cached.yesterdayJackpotPool;
+    payload.nextResetAtMs = cached.nextResetAtMs;
+    payload.myTodayRank = computeMyGreedyRank(greedyTodayLeaderboard, userId);
+    payload.myYesterdayRank = computeMyGreedyRank(greedyYesterdayLeaderboard, userId);
   }
   return payload;
 }
@@ -6186,6 +6278,7 @@ wss.on('connection', (ws, req) => {
           ? buildGreedyPerUserOutcomePayload('GREEDY_SETTLEMENT', roundNumber, uid, msg.clientSentElapsedMs)
           : null;
 
+        const rankState = buildGreedyRankState(uid);
         safeSend(ws, {
           type: 'GREEDY_STATE_SYNC',
           serverNowMs: nowMs,
@@ -6199,8 +6292,17 @@ wss.on('connection', (ws, req) => {
           resultHistory: getGreedyResultHistory(latestCompletedForHistory),
           drawReveal,
           settlement,
-          todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard),
-          yesterdayRankList: formatGreedyLeaderboard(greedyYesterdayLeaderboard),
+          ...rankState,
+        });
+        break;
+      }
+
+      case 'GREEDY_GET_RANK': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (uid && !meta.userId) meta.userId = uid;
+        safeSend(ws, {
+          type: 'GREEDY_RANK_SYNC',
+          ...buildGreedyRankState(uid),
         });
         break;
       }
@@ -6352,6 +6454,18 @@ wss.on('connection', (ws, req) => {
         if (chipHist.length > 32) {
           chipHist.splice(0, chipHist.length - 32);
         }
+
+        ensureGreedyDayFresh();
+        const prevLb = greedyTodayLeaderboard.get(uid);
+        const nextCoinsPlay = getGreedyEntryCoinsPlay(prevLb) + totalCost;
+        greedyTodayLeaderboard.set(uid, {
+          userId: uid,
+          userName: existing.nickname || userProf.nickname || `User ${uid}`,
+          avatarUri: incomingHttpAvatar || (prevLb && prevLb.avatarUri) || '',
+          coinsPlay: nextCoinsPlay,
+          winCoins: nextCoinsPlay,
+        });
+        firestoreStore.markGlobalDirty();
 
         const slotTotals = [...cachedTotals];
         safeSend(ws, {
@@ -6713,6 +6827,8 @@ firestoreStore.bindStateRefs({
   getGiftsCustomizedByAdmin: () => giftsCustomizedByAdmin,
   getStoreCustomizedByAdmin: () => storeCustomizedByAdmin,
   getGreedyDayIndex: () => greedyDayIndex,
+  getGreedyTodayJackpotPool: () => greedyTodayJackpotPool,
+  getGreedyYesterdayJackpotPool: () => greedyYesterdayJackpotPool,
   getGreedyTodayLeaderboard: () => greedyTodayLeaderboard,
   getGreedyYesterdayLeaderboard: () => greedyYesterdayLeaderboard,
   getAdminRules: () => ({
@@ -6728,16 +6844,28 @@ firestoreStore.bindStateRefs({
     if (typeof doc.greedyDayIndex === 'number') {
       greedyDayIndex = doc.greedyDayIndex;
     }
+    if (typeof doc.greedyTodayJackpotPool === 'number') {
+      greedyTodayJackpotPool = Math.max(0, Math.floor(doc.greedyTodayJackpotPool));
+    }
+    if (typeof doc.greedyYesterdayJackpotPool === 'number') {
+      greedyYesterdayJackpotPool = Math.max(0, Math.floor(doc.greedyYesterdayJackpotPool));
+    }
     if (Array.isArray(doc.greedyTodayLeaderboard)) {
       greedyTodayLeaderboard = new Map();
       doc.greedyTodayLeaderboard.forEach((e) => {
-        if (e && e.userId) greedyTodayLeaderboard.set(e.userId, e);
+        if (e && e.userId) {
+          const cp = getGreedyEntryCoinsPlay(e);
+          greedyTodayLeaderboard.set(e.userId, { ...e, coinsPlay: cp, winCoins: cp });
+        }
       });
     }
     if (Array.isArray(doc.greedyYesterdayLeaderboard)) {
       greedyYesterdayLeaderboard = new Map();
       doc.greedyYesterdayLeaderboard.forEach((e) => {
-        if (e && e.userId) greedyYesterdayLeaderboard.set(e.userId, e);
+        if (e && e.userId) {
+          const cp = getGreedyEntryCoinsPlay(e);
+          greedyYesterdayLeaderboard.set(e.userId, { ...e, coinsPlay: cp, winCoins: cp });
+        }
       });
     }
     ensureGreedyDayFresh();
