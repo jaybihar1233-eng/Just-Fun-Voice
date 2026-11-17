@@ -5,6 +5,16 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { WebSocketServer, WebSocket } = require('ws');
+let profileAndMedalsModule;
+try {
+  profileAndMedalsModule = require('./modules/profileAndMedalsModule');
+} catch (_) {
+  try {
+    profileAndMedalsModule = require('./backend/modules/profileAndMedalsModule');
+  } catch (__) {
+    profileAndMedalsModule = null;
+  }
+}
 let firestoreStore;
 try {
   firestoreStore = require('./firestoreStore');
@@ -900,9 +910,12 @@ function buildUserSummary(u, viewerId = '') {
     equippedBubbleId: u.equippedBubbleId || '',
     equippedMicWaveId: u.equippedMicWaveId || '',
     equippedSpecialId: u.equippedSpecialId || '',
+    bgUrl: u.bgUrl || '',
     unlockedMedalIds: Array.isArray(u.unlockedMedalIds) ? u.unlockedMedalIds : [],
+    equippedMedalIds: Array.isArray(u.equippedMedalIds) ? u.equippedMedalIds.slice(0, 10) : [],
+    medalProgress: u.medalProgress && typeof u.medalProgress === 'object' ? u.medalProgress : {},
     receivedGifts: Array.isArray(u.receivedGifts) ? u.receivedGifts : [],
-    photos: Array.isArray(u.photos) ? u.photos.slice(0, 6) : [],
+    photos: Array.isArray(u.photos) ? u.photos.slice(0, 4) : [],
   };
 }
 
@@ -2791,19 +2804,28 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
         </div>
 
         <div class="card">
-          <h3>🎖️ Add or Update Dynamic Medal (Real-Time Firestore Sync)</h3>
+          <h3>🎖️ Add or Update Gift-Linked Star Medal (1★ to 4★ Real-Time Sync)</h3>
           <div class="form-grid">
-            <input id="newMedalId" placeholder="Medal ID (e.g. m_superstar)" />
-            <input id="newMedalName" placeholder="Medal Title (e.g. Superstar Host)" />
+            <input id="newMedalId" placeholder="Medal ID (e.g. g_ferris_star)" />
+            <input id="newMedalName" placeholder="Medal Title (e.g. Ferris Wheel Star)" />
             <select id="newMedalCat">
-              <option value="ACHIEVEMENT">ACHIEVEMENT</option>
-              <option value="GIFT">GIFT</option>
+              <option value="GIFT">GIFT (Gift-Linked)</option>
+              <option value="ACHIEVEMENT">ACHIEVEMENT (Total Coins)</option>
               <option value="ACTIVITY">ACTIVITY</option>
             </select>
-            <input id="newMedalStars" type="number" min="1" max="4" value="3" placeholder="Stars (1-4)" />
-            <input id="newMedalDesc" placeholder="Description" value="Awarded by Official Admin" />
+            <select id="newMedalLinkType">
+              <option value="SPECIFIC_GIFT">Specific Gift (By Gift ID / Name)</option>
+              <option value="ALL_GIFTS_COINS">Total Gift Coins Sent (All Gifts)</option>
+            </select>
+            <input id="newMedalGiftId" placeholder="Linked Gift ID (e.g. g_ferris) or blank" />
+            <input id="newMedalGiftName" placeholder="Linked Gift Name (e.g. Ferris Wheel)" />
+            <input id="newMedalStar1" type="number" value="1000000" placeholder="1★ Coins (e.g. 10,00,000)" />
+            <input id="newMedalStar2" type="number" value="5000000" placeholder="2★ Coins (e.g. 50,00,000)" />
+            <input id="newMedalStar3" type="number" value="10000000" placeholder="3★ Coins (e.g. 1,00,00,000)" />
+            <input id="newMedalStar4" type="number" value="50000000" placeholder="4★ Coins (e.g. 5,00,00,000)" />
+            <input id="newMedalDesc" placeholder="Description" value="Send linked gift in voice rooms to upgrade 1★ to 4★" />
             <input id="newMedalIconUrl" placeholder="Medal Icon URL (https://...)" />
-            <button onclick="saveCustomMedal()">➕ Save / Update Medal</button>
+            <button onclick="saveCustomMedal()">➕ Save / Update Gift-Linked Medal</button>
           </div>
           <div id="customMedalsPreview" style="color:var(--muted); font-size:13px; margin-top:8px;"></div>
         </div>
@@ -3006,7 +3028,7 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
         '</tr>').join('');
 
         document.getElementById('customMedalsPreview').innerHTML = (d.customMedals || [])
-          .map(m => '<span class="badge ok" style="margin:4px 6px 4px 0; display:inline-flex; align-items:center; gap:6px;">🏅 ' + m.id + ': ' + m.name + ' (' + (m.category || 'ACHIEVEMENT') + ') <a href="#" style="color:#ff8a80; text-decoration:none; font-weight:800;" onclick="deleteCustomMedal(\\'' + m.id + '\\');return false;">✕</a></span>').join('') || 'No custom medals added yet.';
+          .map(m => '<span class="badge ok" style="margin:4px 6px 4px 0; display:inline-flex; align-items:center; gap:6px;">🏅 ' + m.id + ': ' + m.name + ' (' + (m.linkedGiftName ? ('Gift: ' + m.linkedGiftName) : (m.category || 'ACHIEVEMENT')) + ' | 1★:' + ((m.starThresholds && m.starThresholds[0]) || m.targetProgress || 1000000).toLocaleString() + ') <a href="#" style="color:#ff8a80; text-decoration:none; font-weight:800;" onclick="deleteCustomMedal(\\'' + m.id + '\\');return false;">✕</a></span>').join('') || 'No custom medals added yet.';
 
         document.getElementById('eventsTableBody').innerHTML = (d.events || []).map(ev => '<tr>' +
           '<td>' + ev.id + '</td>' +
@@ -3358,11 +3380,19 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
 
     async function saveCustomMedal() {
       try {
+        const s1 = Number(document.getElementById('newMedalStar1')?.value || 1000000);
+        const s2 = Number(document.getElementById('newMedalStar2')?.value || s1 * 5);
+        const s3 = Number(document.getElementById('newMedalStar3')?.value || s2 * 2);
+        const s4 = Number(document.getElementById('newMedalStar4')?.value || s3 * 5);
         const body = {
           id: document.getElementById('newMedalId').value.trim(),
           name: document.getElementById('newMedalName').value.trim(),
           category: document.getElementById('newMedalCat').value,
-          starCount: Number(document.getElementById('newMedalStars').value || 3),
+          linkType: document.getElementById('newMedalLinkType')?.value || 'SPECIFIC_GIFT',
+          linkedGiftId: document.getElementById('newMedalGiftId')?.value.trim() || '',
+          linkedGiftName: document.getElementById('newMedalGiftName')?.value.trim() || '',
+          starThresholds: [s1, s2, s3, s4],
+          starCount: 4,
           description: document.getElementById('newMedalDesc').value.trim(),
           iconUrl: document.getElementById('newMedalIconUrl').value.trim(),
           active: true
@@ -3878,23 +3908,26 @@ app.post('/api/admin/users/medal-level', requireAdminAuth, (req, res) => {
   res.json({ ok: true, profile: prof });
 });
 
-app.post('/api/admin/medals', requireAdminAuth, (req, res) => {
-  const id = String(req.body.id || `m_${Date.now()}`).trim();
-  const name = String(req.body.name || '').trim();
-  const category = String(req.body.category || 'ACHIEVEMENT').trim().toUpperCase();
-  const starCount = Math.max(1, Math.min(4, Math.floor(Number(req.body.starCount || 3))));
-  const description = String(req.body.description || 'Official Medal').trim();
-  const unlockCondition = String(req.body.unlockCondition || 'Granted by Official Admin').trim();
-  const iconUrl = String(req.body.iconUrl || '').trim();
-  const targetProgress = Math.max(1, Math.floor(Number(req.body.targetProgress || 1)));
-  const active = req.body.active !== false;
-  if (!name) return res.status(400).json({ error: 'Medal name required' });
-  const medal = { id, name, category, starCount, description, unlockCondition, iconUrl, targetProgress, active };
-  DYNAMIC_MEDALS_CATALOG.set(id, medal);
-  broadcastDynamicCatalog();
-  firestoreStore.markGlobalDirty();
-  res.json({ ok: true, medal });
-});
+const profileAndMedals = profileAndMedalsModule
+  ? profileAndMedalsModule.initProfileAndMedalsModule({
+      app,
+      users,
+      rooms,
+      userFollowers,
+      userFollowing,
+      userVisitors,
+      blockedUsers,
+      DYNAMIC_GIFTS_CATALOG,
+      DYNAMIC_MEDALS_CATALOG,
+      firestoreStore,
+      sendToUser,
+      pushSocialSyncToUser,
+      pushSystemNotificationToUser,
+      broadcastDynamicCatalog,
+      requireAdminAuth,
+      buildUserSummary,
+    })
+  : null;
 
 app.delete('/api/admin/medals/:id', requireAdminAuth, (req, res) => {
   const id = String(req.params.id || '').trim();
@@ -4163,12 +4196,32 @@ wss.on('connection', (ws, req) => {
 
         const existing = users.get(uid) || {};
         const srvLevelState = userLevels.get(uid);
+        const mergedUnlockedMedals = Array.from(
+          new Set([
+            ...(Array.isArray(existing.unlockedMedalIds) ? existing.unlockedMedalIds : []),
+            ...(Array.isArray(profile.unlockedMedalIds) ? profile.unlockedMedalIds : []),
+          ])
+        );
+        const mergedEquippedMedals = Array.isArray(profile.equippedMedalIds) && profile.equippedMedalIds.length > 0
+          ? profile.equippedMedalIds.slice(0, 10)
+          : (Array.isArray(existing.equippedMedalIds) ? existing.equippedMedalIds.slice(0, 10) : []);
+        const mergedPhotos = Array.isArray(profile.photos) && profile.photos.length > 0
+          ? profile.photos.slice(0, 4)
+          : (Array.isArray(existing.photos) ? existing.photos.slice(0, 4) : []);
         const merged = {
           ...existing,
           ...profile,
           userId: uid,
           user8DigitId: uid,
           accountUid,
+          bgUrl: profile.bgUrl !== undefined && profile.bgUrl !== '' ? profile.bgUrl : (existing.bgUrl || ''),
+          photos: mergedPhotos,
+          unlockedMedalIds: mergedUnlockedMedals,
+          equippedMedalIds: mergedEquippedMedals,
+          medalProgress: existing.medalProgress || profile.medalProgress || {},
+          receivedGifts: Array.isArray(existing.receivedGifts) && existing.receivedGifts.length > 0
+            ? existing.receivedGifts
+            : (Array.isArray(profile.receivedGifts) ? profile.receivedGifts : []),
           level: srvLevelState ? srvLevelState.level : Number(profile.level ?? existing.level ?? 0),
           // Keep server-authoritative charm points if higher than client cache
           totalCharmPoints: Math.max(Number(existing.totalCharmPoints || 0), Number(profile.totalCharmPoints || 0)),
@@ -4183,6 +4236,13 @@ wss.on('connection', (ws, req) => {
         firestoreStore.markUserDirty(uid);
         evaluateInviteDay3Retention(uid, msg.deviceIntegrity || null);
         safeSend(ws, { type: 'USER_REGISTERED', profile: users.get(uid) || merged });
+        safeSend(ws, {
+          type: 'MEDAL_PROGRESS_SYNC',
+          userId: uid,
+          medalProgress: merged.medalProgress || {},
+          unlockedMedalIds: merged.unlockedMedalIds || [],
+          equippedMedalIds: merged.equippedMedalIds || [],
+        });
         safeSend(ws, buildSocialSnapshotForUser(uid));
         safeSend(ws, buildInviteStatePayload(uid, msg.deviceIntegrity || null));
         safeSend(ws, buildWalletStatePayload(uid, msg.deviceIntegrity || null));
@@ -4860,6 +4920,18 @@ wss.on('connection', (ws, req) => {
           const giftSendExp = Math.max(1, Math.floor(coinsSpent / 5));
           grantUserExp(fromUserId, giftSendExp, 'GIFT_SEND');
           creditInviteGiftCommission(fromUserId, coinsSpent);
+          if (profileAndMedals && typeof profileAndMedals.onGiftTransactionCompleted === 'function') {
+            profileAndMedals.onGiftTransactionCompleted({
+              fromUserId,
+              uniqueTargets,
+              coinsSpent,
+              perTargetCharm,
+              giftId: msg.giftId || '',
+              giftName: msg.giftName || '',
+              giftIcon: msg.giftIcon || '',
+              giftCount: Number(msg.giftCount || 1),
+            });
+          }
           firestoreStore.markUserDirty(fromUserId);
         }
 
@@ -5265,9 +5337,17 @@ wss.on('connection', (ws, req) => {
           id: message.id || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           createdAtMs: message.createdAtMs || Date.now(),
         };
-        room.messages.push(chatItem);
-        if (room.messages.length > 80) {
-          room.messages = room.messages.slice(-60);
+        if (
+          chatItem.replaceKey &&
+          room.messages.length > 0 &&
+          room.messages[room.messages.length - 1].replaceKey === chatItem.replaceKey
+        ) {
+          room.messages[room.messages.length - 1] = chatItem;
+        } else {
+          room.messages.push(chatItem);
+        }
+        if (room.messages.length > 200) {
+          room.messages = room.messages.slice(-200);
         }
         firestoreStore.markRoomDirty(room.id);
         broadcastToRoom(room, {
@@ -6517,6 +6597,13 @@ wss.on('connection', (ws, req) => {
         safeSend(ws, buildInviteStatePayload(uid, integrity));
         break;
       }
+
+      default: {
+        if (profileAndMedals && typeof profileAndMedals.handleSocketMessage === 'function') {
+          profileAndMedals.handleSocketMessage(ws, msg, meta);
+        }
+        break;
+      }
     }
   });
 
@@ -6667,6 +6754,9 @@ firestoreStore.bindStateRefs({
 async function startServer() {
   try {
     await firestoreStore.hydrateFromCloud();
+    if (profileAndMedals && typeof profileAndMedals.ensureDefaultMedalsSeeded === 'function') {
+      profileAndMedals.ensureDefaultMedalsSeeded();
+    }
     // Rebuild reverse device->user index after hydration
     userKnownDevices.forEach((keys, uid) => {
       keys.forEach((k) => {
