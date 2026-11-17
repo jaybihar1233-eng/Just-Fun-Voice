@@ -6475,6 +6475,8 @@ wss.on('connection', (ws, req) => {
           slotTotals,
           serverBalance: newBal,
           serverNowMs: nowMs,
+          myTodayRank: computeMyGreedyRank(greedyTodayLeaderboard, uid),
+          todayRankList: formatGreedyLeaderboard(greedyTodayLeaderboard, 15),
         });
 
         queueGreedyCrowdBetEvent(curRound, uid, betSlots, chipIdx, slotTotals, ws);
