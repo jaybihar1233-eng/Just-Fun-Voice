@@ -303,6 +303,35 @@ const walletProcessedTxIds = new Map(); // Map<txId, { userId, amount, remaining
 const walletLastRechargeAt = new Map(); // Map<userId, number>
 const greedyRoundBetCounts = new Map(); // Map<roundNumber, Map<userId, number>>
 const greedyLastBetAtMs = new Map(); // Map<userId, number>
+const greedyBetRecords = new Map(); // Map<userId, Array<{ roundNumber, settleTimeMs, betsBySlot, winningFoodId, totalCost, totalWin, afterBalance }>>
+const GREEDY_RECORD_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const GREEDY_RECORD_MAX_COUNT = 200;
+
+function getPrunedGreedyBetRecords(uid, nowMs = Date.now()) {
+  if (!uid) return [];
+  const raw = greedyBetRecords.get(String(uid)) || [];
+  const cutoff = nowMs - GREEDY_RECORD_RETENTION_MS;
+  const filtered = raw
+    .filter((rec) => rec && Number(rec.settleTimeMs || 0) >= cutoff && Number(rec.totalCost || 0) > 0)
+    .sort((a, b) => Number(b.settleTimeMs || 0) - Number(a.settleTimeMs || 0))
+    .slice(0, GREEDY_RECORD_MAX_COUNT);
+  if (filtered.length !== raw.length) {
+    greedyBetRecords.set(String(uid), filtered);
+  }
+  return filtered;
+}
+
+function appendGreedyBetRecord(uid, record) {
+  const key = String(uid || '');
+  if (!key || !record || Number(record.totalCost || 0) <= 0) return;
+  const nowMs = Date.now();
+  const existing = getPrunedGreedyBetRecords(key, nowMs);
+  if (existing.some((r) => Number(r.roundNumber) === Number(record.roundNumber))) {
+    return;
+  }
+  const next = [record, ...existing].slice(0, GREEDY_RECORD_MAX_COUNT);
+  greedyBetRecords.set(key, next);
+}
 let greedyCrowdBatch = null; // { roundNumber, events: Array<{ userId, slotIds, chipIndex }>, slotTotals, singleSourceWs }
 let greedyCrowdFlushTimer = null;
 
@@ -780,6 +809,24 @@ function computeAndCacheGreedySettlement(roundNumber) {
           userName: name,
           avatarUri: avatar,
           winAmount,
+        });
+      }
+
+      if (betTotal > 0) {
+        const cleanBetsBySlot = {};
+        for (let s = 0; s < 8; s++) {
+          const amt = Number(b.slotBets[s] || 0);
+          if (amt > 0) cleanBetsBySlot[s] = amt;
+        }
+        const settleTimeMs = GREEDY_EPOCH_MS + (Math.floor(roundNumber) * GREEDY_ROUND_MS) + 35000;
+        appendGreedyBetRecord(b.userId, {
+          roundNumber: Math.floor(roundNumber),
+          settleTimeMs,
+          betsBySlot: cleanBetsBySlot,
+          winningFoodId,
+          totalCost: betTotal,
+          totalWin: winAmount,
+          afterBalance: getOrInitGreedyBalance(b.userId),
         });
       }
     }
@@ -6307,6 +6354,17 @@ wss.on('connection', (ws, req) => {
         break;
       }
 
+      case 'GREEDY_GET_RECORDS': {
+        const uid = String(meta.userId || msg.userId || '');
+        if (uid && !meta.userId) meta.userId = uid;
+        safeSend(ws, {
+          type: 'GREEDY_RECORDS_SYNC',
+          records: getPrunedGreedyBetRecords(uid),
+          serverNowMs: Date.now(),
+        });
+        break;
+      }
+
       case 'GREEDY_CLOSE': {
         greedySubscribers.delete(ws);
         break;
@@ -6798,6 +6856,7 @@ wss.on('connection', (ws, req) => {
 firestoreStore.bindStateRefs({
   users,
   greedyUserBalances,
+  greedyBetRecords,
   userDiamonds,
   userLevels,
   walletTransactions,

@@ -217,6 +217,7 @@ function serializeUserDoc(uid) {
     diamondsBalance: Number(r.userDiamonds.get(uid) ?? 0),
     levelState,
     walletTransactions: (r.walletTransactions.get(uid) || []).slice(0, 40),
+    greedyBetRecords: (r.greedyBetRecords?.get(uid) || []).slice(0, 200),
     dailyCheckInDate: r.walletDailyCheckIns.get(uid) || '',
     storeInventory,
     inviteLedger,
@@ -503,6 +504,13 @@ function applyHydratedUser(doc) {
   }
   if (Array.isArray(doc.walletTransactions) && !r.walletTransactions.has(uid)) {
     r.walletTransactions.set(uid, doc.walletTransactions);
+  }
+  if (Array.isArray(doc.greedyBetRecords) && r.greedyBetRecords && !r.greedyBetRecords.has(uid)) {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const pruned = doc.greedyBetRecords
+      .filter((rec) => rec && Number(rec.settleTimeMs || 0) >= cutoff && Number(rec.totalCost || 0) > 0)
+      .slice(0, 200);
+    r.greedyBetRecords.set(uid, pruned);
   }
   if (doc.dailyCheckInDate && !r.walletDailyCheckIns.has(uid)) {
     r.walletDailyCheckIns.set(uid, doc.dailyCheckInDate);
