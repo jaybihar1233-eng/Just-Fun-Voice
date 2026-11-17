@@ -5332,9 +5332,12 @@ wss.on('connection', (ws, req) => {
         const { roomId, message } = msg;
         const room = rooms.get(roomId);
         if (!room || !message) break;
+        const knownSender = message.senderId ? users.get(message.senderId) : null;
+        const resolvedAvatar = message.senderAvatarUri || (knownSender && knownSender.avatarUri) || '';
         const chatItem = {
           ...message,
           id: message.id || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          senderAvatarUri: resolvedAvatar,
           createdAtMs: message.createdAtMs || Date.now(),
         };
         if (
