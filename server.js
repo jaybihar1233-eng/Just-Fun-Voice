@@ -2176,6 +2176,28 @@ function buildRocketStatePayload(room) {
   };
 }
 
+function grantStoreItemReward(uid, itemId, days, giftedByName = 'Rocket Reward') {
+  const spec = STORE_CATALOG[itemId];
+  const d = Math.max(1, Math.floor(Number(days || 0)));
+  if (!uid || !spec || d <= 0) return false;
+  const nowMs = Date.now();
+  const inv = pruneAndSyncUserStore(uid, nowMs);
+  const existing = inv.items.get(itemId);
+  const baseStart = existing && Number(existing.expiresAtMs || 0) > nowMs ? Number(existing.expiresAtMs) : nowMs;
+  inv.items.set(itemId, {
+    itemId,
+    category: spec.category,
+    expiresAtMs: baseStart + d * STORE_DAY_MS,
+    totalDaysPurchased: (existing ? Number(existing.totalDaysPurchased || 0) : 0) + d,
+    purchasedAtMs: existing ? existing.purchasedAtMs : nowMs,
+    giftedById: 'rocket_system',
+    giftedByName,
+  });
+  pruneAndSyncUserStore(uid, nowMs);
+  firestoreStore.markUserDirty(uid);
+  return true;
+}
+
 function computeRocketLaunchRewards(level, sortedContribs, room) {
   const topRewards = level === 1
     ? [50000, 25000, 15000]
@@ -2183,6 +2205,16 @@ function computeRocketLaunchRewards(level, sortedContribs, room) {
       ? [120000, 60000, 30000]
       : [300000, 150000, 80000];
   const baseLucky = level === 1 ? 8000 : level === 2 ? 18000 : 35000;
+  const topFrameId = level === 1
+    ? 'f_charm_crescent'
+    : level === 2
+      ? 'f_3rd_anniversary'
+      : 'f_ornate_gold';
+  const topVehicleId = level === 1
+    ? 'v_silver_roadster'
+    : level === 2
+      ? 'v_phantom_car'
+      : 'v_supersonic_jet';
 
   const rewardsByUser = {};
   const expByUser = {};
@@ -2196,7 +2228,7 @@ function computeRocketLaunchRewards(level, sortedContribs, room) {
     const c = qualifiedTop[i];
     if (!c || !c.userId) continue;
     const amt = topRewards[i];
-    const expWon = amt; // 1x Coin Reward as EXP (no 15x extra)
+    const expWon = amt; // 1x Coin Reward as EXP
     const uProf = users.get(c.userId);
     rewardsByUser[c.userId] = amt;
     expByUser[c.userId] = expWon;
@@ -2208,6 +2240,10 @@ function computeRocketLaunchRewards(level, sortedContribs, room) {
       expWon,
       isTopContributor: true,
       rank: i + 1,
+      frameItemId: topFrameId,
+      frameDays: 3,
+      vehicleItemId: topVehicleId,
+      vehicleDays: 3,
     });
   }
 
@@ -2217,6 +2253,8 @@ function computeRocketLaunchRewards(level, sortedContribs, room) {
     const stepBonus = (Math.floor(Math.random() * 4) + 1) * Math.floor(baseLucky / 4);
     const amt = baseLucky + stepBonus;
     rewardsByUser[uid] = amt;
+    const luckyVehicleChance = level === 1 ? 0.15 : level === 2 ? 0.25 : 0.35;
+    const wonLuckyVehicle = Math.random() < luckyVehicleChance;
     winners.push({
       userId: uid,
       nickname: uProf.nickname || (uid === room.hostId ? room.hostName : `User ${uid}`),
@@ -2225,6 +2263,10 @@ function computeRocketLaunchRewards(level, sortedContribs, room) {
       expWon: 0,
       isTopContributor: false,
       rank: winners.length + 1,
+      frameItemId: '',
+      frameDays: 0,
+      vehicleItemId: wonLuckyVehicle ? 'v_silver_roadster' : '',
+      vehicleDays: wonLuckyVehicle ? 1 : 0,
     });
   }
 
@@ -5202,6 +5244,18 @@ wss.on('connection', (ws, req) => {
                       `rocket_win_${launchId}_${winnerUid}`
                     );
                     pushWalletSyncToUser(winnerUid);
+                  }
+                }
+                for (const w of winners) {
+                  let grantedStoreItem = false;
+                  if (w.frameItemId && Number(w.frameDays || 0) > 0) {
+                    grantedStoreItem = grantStoreItemReward(w.userId, w.frameItemId, w.frameDays, `Lv.${lvl} Rocket TOP${w.rank}`) || grantedStoreItem;
+                  }
+                  if (w.vehicleItemId && Number(w.vehicleDays || 0) > 0) {
+                    grantedStoreItem = grantStoreItemReward(w.userId, w.vehicleItemId, w.vehicleDays, `Lv.${lvl} Rocket Reward`) || grantedStoreItem;
+                  }
+                  if (grantedStoreItem) {
+                    sendToUser(w.userId, buildStoreStatePayload(w.userId));
                   }
                 }
 
