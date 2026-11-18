@@ -25,6 +25,16 @@ try {
     globalRocketBroadcastModule = null;
   }
 }
+let storeAndMedalCatalogModule;
+try {
+  storeAndMedalCatalogModule = require('./catalog_manager/storeAndMedalCatalog');
+} catch (_) {
+  try {
+    storeAndMedalCatalogModule = require('./backend/catalog_manager/storeAndMedalCatalog');
+  } catch (__) {
+    storeAndMedalCatalogModule = null;
+  }
+}
 let firestoreStore;
 try {
   firestoreStore = require('./firestoreStore');
@@ -354,38 +364,9 @@ const STORE_DURATION_MULT = {
   15: 1.8,
   30: 3.0,
 };
-const STORE_CATALOG = {
-  // VEHICLE
-  v_phantom_car: { id: 'v_phantom_car', name: 'Phantom Supercar', subtitle: 'Royal V12 Roar & Golden Drift Entrance', category: 'VEHICLE', basePrice7Days: 15000, rarityStars: 3, hasAnimationPlay: true, active: true },
-  v_silver_roadster: { id: 'v_silver_roadster', name: 'Silver Roadster', subtitle: 'Lightning Speedster Room Entry Effect', category: 'VEHICLE', basePrice7Days: 10000, rarityStars: 2, hasAnimationPlay: true, active: true },
-  v_royal_crown_ride: { id: 'v_royal_crown_ride', name: 'Imperial Crown Chariot', subtitle: "King's Golden Crown Room Entrance", category: 'VEHICLE', basePrice7Days: 25000, rarityStars: 3, hasAnimationPlay: true, active: true },
-  v_starlight_cruiser: { id: 'v_starlight_cruiser', name: 'Starlight Cruiser', subtitle: 'Neon Galaxy Trail Room Entrance', category: 'VEHICLE', basePrice7Days: 12000, rarityStars: 2, hasAnimationPlay: true, active: true },
-  v_supersonic_jet: { id: 'v_supersonic_jet', name: 'Golden Sky Jet', subtitle: 'VIP Supersonic Jet Fly-In Effect', category: 'VEHICLE', basePrice7Days: 30000, rarityStars: 3, hasAnimationPlay: true, active: true },
-  v_cupid_heart: { id: 'v_cupid_heart', name: 'Lover Heart Float', subtitle: 'Romantic Pink Petals Entrance', category: 'VEHICLE', basePrice7Days: 8000, rarityStars: 1, hasAnimationPlay: true, active: true },
-  // FRAME
-  f_3rd_anniversary: { id: 'f_3rd_anniversary', name: '3rd Anniversary Frame', subtitle: 'Exclusive 3-Star Golden Wing & Cake Frame', category: 'FRAME', basePrice7Days: 12000, rarityStars: 3, hasAnimationPlay: false, active: true },
-  f_charm_crescent: { id: 'f_charm_crescent', name: 'Charm Star Frame', subtitle: 'Golden Crescent Moon & Starlight Rim', category: 'FRAME', basePrice7Days: 6000, rarityStars: 1, hasAnimationPlay: false, active: true },
-  f_cp_lover: { id: 'f_cp_lover', name: 'CP Lover Lv.1 Frame', subtitle: 'Rose Gold Couple & Emerald Gem Frame', category: 'FRAME', basePrice7Days: 9000, rarityStars: 2, hasAnimationPlay: false, active: true },
-  f_ornate_gold: { id: 'f_ornate_gold', name: 'Royal Ornate Gold', subtitle: 'Supreme Noble Gold Filigree Frame', category: 'FRAME', basePrice7Days: 18000, rarityStars: 3, hasAnimationPlay: false, active: true },
-  // BUBBLE
-  b_purple_panther: { id: 'b_purple_panther', name: 'Purple Panther Bubble', subtitle: 'Fierce Neon Panther Room & Chat Frame', category: 'BUBBLE', basePrice7Days: 8000, rarityStars: 3, hasAnimationPlay: false, sampleBubbleText: 'Welcome to Just Fun Room! 🎤', active: true },
-  b_starlight_galaxy: { id: 'b_starlight_galaxy', name: 'Starlight Galaxy Bubble', subtitle: 'Dreamy Purple Starry Sky Chat Box', category: 'BUBBLE', basePrice7Days: 5000, rarityStars: 2, hasAnimationPlay: false, sampleBubbleText: 'Hello friends! Join the mic 🎤✨', active: true },
-  b_golden_combo: { id: 'b_golden_combo', name: 'Imperial Gold Bubble', subtitle: 'Golden Rich Supporter Chat Highlight', category: 'BUBBLE', basePrice7Days: 10000, rarityStars: 3, hasAnimationPlay: false, sampleBubbleText: 'VIP Boss is in the house 👑🔥', active: true },
-  b_cp_romance: { id: 'b_cp_romance', name: 'CP Sweetheart Bubble', subtitle: 'Pink & Gold Couple Chat Style', category: 'BUBBLE', basePrice7Days: 6500, rarityStars: 2, hasAnimationPlay: false, sampleBubbleText: 'Best Friends Forever ❤️✨', active: true },
-  // MIC_WAVE
-  w_emerald_pulse: { id: 'w_emerald_pulse', name: 'Emerald Neon Wave', subtitle: 'Glowing Mint-Emerald Sound Rings on Mic', category: 'MIC_WAVE', basePrice7Days: 6000, rarityStars: 2, hasAnimationPlay: true, micWaveColorHex: 0xFF19CC9D, active: true },
-  w_golden_crown_wave: { id: 'w_golden_crown_wave', name: 'Royal Gold Wave', subtitle: 'Imperial Golden Sound Pulse on Room Seat', category: 'MIC_WAVE', basePrice7Days: 12000, rarityStars: 3, hasAnimationPlay: true, micWaveColorHex: 0xFFFFB300, active: true },
-  w_cyber_violet_wave: { id: 'w_cyber_violet_wave', name: 'Cyber Violet Wave', subtitle: 'Electric Purple DJ Sound Rings on Mic', category: 'MIC_WAVE', basePrice7Days: 8500, rarityStars: 2, hasAnimationPlay: true, micWaveColorHex: 0xFFAA00FF, active: true },
-  w_rose_lover_wave: { id: 'w_rose_lover_wave', name: 'Romantic Rose Wave', subtitle: 'Sweet Pink Heartbeat Mic Aura', category: 'MIC_WAVE', basePrice7Days: 7500, rarityStars: 2, hasAnimationPlay: true, micWaveColorHex: 0xFFFF4081, active: true },
-  // SPECIAL_ID
-  sid_888888: { id: 'sid_888888', name: 'SID: 888888', subtitle: 'Supreme Six-8s Wealth VIP ID Badge', category: 'SPECIAL_ID', basePrice7Days: 50000, rarityStars: 3, hasAnimationPlay: false, specialIdNumber: '888888', active: true },
-  sid_999999: { id: 'sid_999999', name: 'SID: 999999', subtitle: 'Emperor 999999 Eternal Honour ID', category: 'SPECIAL_ID', basePrice7Days: 50000, rarityStars: 3, hasAnimationPlay: false, specialIdNumber: '999999', active: true },
-  sid_777777: { id: 'sid_777777', name: 'SID: 777777', subtitle: 'Lucky Jackpot 777777 Golden ID', category: 'SPECIAL_ID', basePrice7Days: 35000, rarityStars: 3, hasAnimationPlay: false, specialIdNumber: '777777', active: true },
-  sid_5201314: { id: 'sid_5201314', name: 'ID: 5201314', subtitle: 'Forever Love Special Charm ID', category: 'SPECIAL_ID', basePrice7Days: 20000, rarityStars: 2, hasAnimationPlay: false, specialIdNumber: '5201314', active: true },
-  sid_100001: { id: 'sid_100001', name: 'ID: 100001', subtitle: 'No.1 Top Host Pioneer Charm ID', category: 'SPECIAL_ID', basePrice7Days: 15000, rarityStars: 2, hasAnimationPlay: false, specialIdNumber: '100001', active: true },
-  sid_112233: { id: 'sid_112233', name: 'ID: 112233', subtitle: 'Double Step Lucky Number ID', category: 'SPECIAL_ID', basePrice7Days: 10000, rarityStars: 1, hasAnimationPlay: false, specialIdNumber: '112233', active: true },
-};
-const userStoreInventories = new Map(); // Map<userId, { items: Map<itemId, ...>, equipped: { VEHICLE, FRAME, BUBBLE, MIC_WAVE, SPECIAL_ID } }>
+// Admin Panel is the single source of truth — zero pre-seeded hardcoded Store items.
+const STORE_CATALOG = {};
+const userStoreInventories = new Map(); // Map<userId, { items: Map<itemId, ...>, equipped: { VEHICLE, THEME, FRAME, BUBBLE, MIC_WAVE, SPECIAL_ID } }>
 const storeProcessedOrderIds = new Map(); // Map<orderId, number>
 const storeLastActionAt = new Map(); // Map<userId, number>
 const STORE_ACTION_COOLDOWN_MS = 1200;
@@ -397,6 +378,7 @@ function getOrCreateStoreInventory(uid) {
       items: new Map(),
       equipped: {
         VEHICLE: null,
+        THEME: null,
         FRAME: null,
         BUBBLE: null,
         MIC_WAVE: null,
@@ -404,6 +386,9 @@ function getOrCreateStoreInventory(uid) {
       },
     };
     userStoreInventories.set(uid, inv);
+  }
+  if (inv.equipped && !Object.prototype.hasOwnProperty.call(inv.equipped, 'THEME')) {
+    inv.equipped.THEME = null;
   }
   return inv;
 }
@@ -425,11 +410,15 @@ function pruneAndSyncUserStore(uid, nowMs = Date.now()) {
   if (prof) {
     const eqVehicleId = inv.equipped.VEHICLE || '';
     const eqVehicleSpec = eqVehicleId ? STORE_CATALOG[eqVehicleId] : null;
+    const eqThemeId = inv.equipped.THEME || '';
+    const eqThemeSpec = eqThemeId ? STORE_CATALOG[eqThemeId] : null;
     const eqSidId = inv.equipped.SPECIAL_ID || '';
     const eqSidSpec = eqSidId ? STORE_CATALOG[eqSidId] : null;
     prof.equippedFrameId = inv.equipped.FRAME || '';
     prof.equippedVehicleId = eqVehicleId;
     prof.equippedVehicleName = eqVehicleSpec ? eqVehicleSpec.name : '';
+    prof.equippedThemeId = eqThemeId;
+    prof.equippedThemeUrl = eqThemeSpec ? (eqThemeSpec.iconUrl || '') : '';
     prof.equippedBubbleId = inv.equipped.BUBBLE || '';
     prof.equippedMicWaveId = inv.equipped.MIC_WAVE || '';
     prof.equippedSpecialId = eqSidSpec ? eqSidSpec.specialIdNumber : '';
@@ -810,6 +799,9 @@ function computeAndCacheGreedySettlement(roundNumber) {
       if (winAmount > 0) {
         const prevBal = getOrInitGreedyBalance(b.userId);
         greedyUserBalances.set(b.userId, prevBal + winAmount);
+        if (typeof catalogManager !== 'undefined' && catalogManager) {
+          catalogManager.onGameCoinsWon(b.userId, winAmount);
+        }
 
         const userProf = users.get(b.userId) || {};
         const name = b.nickname || userProf.nickname || `User ${b.userId}`;
@@ -1521,6 +1513,9 @@ function grantUserExp(uid, expGain, reason = 'EXP') {
 
   if (st.level !== prevLevel) {
     broadcastUserLevelToRooms(uid, st.level);
+    if (typeof catalogManager !== 'undefined' && catalogManager) {
+      catalogManager.onLevelUpdated(uid, st.level);
+    }
   }
 
   sendToUser(
@@ -4285,52 +4280,7 @@ app.delete('/api/admin/gifts/:id', requireAdminAuth, async (req, res) => {
   res.json({ ok: true, deletedId: id });
 });
 
-app.post('/api/admin/store/catalog', requireAdminAuth, (req, res) => {
-  const id = String(req.body.id || `st_${Date.now()}`).trim();
-  const name = String(req.body.name || '').trim();
-  const prev = STORE_CATALOG[id] || {};
-  const subtitle = String(req.body.subtitle || prev.subtitle || 'Exclusive Store Item').trim();
-  const category = String(req.body.category || prev.category || 'FRAME').trim().toUpperCase();
-  const basePrice7Days = Math.max(100, Math.floor(Number(req.body.basePrice7Days || prev.basePrice7Days || 10000)));
-  const rarityStars = Math.max(1, Math.min(3, Math.floor(Number(req.body.rarityStars || prev.rarityStars || 2))));
-  const hasAnimationPlay = req.body.hasAnimationPlay !== undefined
-    ? Boolean(req.body.hasAnimationPlay)
-    : (category === 'VEHICLE' || category === 'MIC_WAVE' || Boolean(prev.hasAnimationPlay));
-  const iconUrl = req.body.iconUrl !== undefined ? String(req.body.iconUrl || '').trim() : (prev.iconUrl || '');
-  const animationUrl = req.body.animationUrl !== undefined ? String(req.body.animationUrl || '').trim() : (prev.animationUrl || '');
-  const specialIdNumber = req.body.specialIdNumber !== undefined ? String(req.body.specialIdNumber || '').trim() : (prev.specialIdNumber || '');
-  const sampleBubbleText = req.body.sampleBubbleText !== undefined ? String(req.body.sampleBubbleText || '').trim() : (prev.sampleBubbleText || 'Welcome to Just Fun Voice Party! 🎤');
-  const active = req.body.active !== false;
-  if (!name) return res.status(400).json({ error: 'Item name is required' });
-  STORE_CATALOG[id] = {
-    ...prev,
-    id,
-    name,
-    subtitle,
-    category,
-    basePrice7Days,
-    rarityStars,
-    hasAnimationPlay,
-    iconUrl,
-    animationUrl,
-    specialIdNumber,
-    sampleBubbleText,
-    active,
-  };
-  storeCustomizedByAdmin = true;
-  broadcastDynamicCatalog();
-  firestoreStore.markGlobalDirty();
-  res.json({ ok: true, item: STORE_CATALOG[id] });
-});
-
-app.delete('/api/admin/store/catalog/:id', requireAdminAuth, (req, res) => {
-  const id = String(req.params.id || '').trim();
-  delete STORE_CATALOG[id];
-  storeCustomizedByAdmin = true;
-  broadcastDynamicCatalog();
-  firestoreStore.markGlobalDirty();
-  res.json({ ok: true, deletedId: id });
-});
+// Store & Medal CRUD + Upload routes are mounted by /backend/catalog_manager/storeAndMedalCatalog.js
 
 app.post('/api/admin/store/grant', requireAdminAuth, (req, res) => {
   const userId = String(req.body.userId || '').trim();
@@ -4409,13 +4359,25 @@ const profileAndMedals = profileAndMedalsModule
     })
   : null;
 
-app.delete('/api/admin/medals/:id', requireAdminAuth, (req, res) => {
-  const id = String(req.params.id || '').trim();
-  DYNAMIC_MEDALS_CATALOG.delete(id);
-  broadcastDynamicCatalog();
-  firestoreStore.markGlobalDirty();
-  res.json({ ok: true, deletedId: id });
-});
+const catalogManager = storeAndMedalCatalogModule
+  ? storeAndMedalCatalogModule.initStoreAndMedalCatalog({
+      app,
+      users,
+      userLevels,
+      STORE_CATALOG,
+      DYNAMIC_MEDALS_CATALOG,
+      firestoreStore,
+      sendToUser,
+      pushSocialSyncToUser,
+      pushSystemNotificationToUser,
+      broadcastDynamicCatalog,
+      requireAdminAuth,
+      uploadMediaToCloudinaryLocal,
+      markStoreCustomized: (v) => {
+        storeCustomizedByAdmin = Boolean(v);
+      },
+    })
+  : null;
 
 app.post('/api/admin/broadcast', requireAdminAuth, (req, res) => {
   const targetUserId = String(req.body.targetUserId || '').trim();
@@ -6219,6 +6181,7 @@ wss.on('connection', (ws, req) => {
         );
 
         creditInviteRechargeProgress(uid, packSpec.coins);
+        if (catalogManager) catalogManager.onRechargeCoins(uid, packSpec.coins);
         firestoreStore.markUserDirty(uid);
         safeSend(ws, buildWalletStatePayload(uid, integrity));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
@@ -6398,8 +6361,11 @@ wss.on('connection', (ws, req) => {
         const orderId = String(msg.clientOrderId || '').trim();
         const itemSpec = STORE_CATALOG[itemId];
         const durationMult = STORE_DURATION_MULT[durationDays];
-        if (!itemSpec || itemSpec.active === false || !durationMult) {
-          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: 'Store item is unavailable or discontinued.' });
+        const buyPerm = catalogManager
+          ? catalogManager.validateStorePurchase(uid, itemSpec)
+          : { ok: Boolean(itemSpec && itemSpec.active !== false), error: 'Store item is unavailable or discontinued.' };
+        if (!buyPerm.ok || !durationMult) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: buyPerm.error || 'Store item is unavailable or discontinued.' });
           break;
         }
         if (!orderId || orderId.length < 8) {
@@ -7170,6 +7136,7 @@ wss.on('connection', (ws, req) => {
 
         const inviterName = inviterUser?.nickname || inviterRoom?.hostName || `User ${code}`;
         pushInviteTicker(inviterName, INVITE_DAY1_COINS, 'FRIEND_JOIN');
+        if (catalogManager) catalogManager.onFriendInvited(code, inviterLedger.invitedFriends.size);
         saveInviteSecurityLedgerToDisk([uid, code], intCheck.keys);
 
         safeSend(ws, {
@@ -7358,9 +7325,7 @@ firestoreStore.bindStateRefs({
       storeCustomizedByAdmin = doc.storeCustomizedByAdmin;
     }
     if (Array.isArray(doc.storeCatalog)) {
-      if (storeCustomizedByAdmin) {
-        Object.keys(STORE_CATALOG).forEach((k) => delete STORE_CATALOG[k]);
-      }
+      Object.keys(STORE_CATALOG).forEach((k) => delete STORE_CATALOG[k]);
       doc.storeCatalog.forEach((item) => {
         if (item && item.id) STORE_CATALOG[item.id] = item;
       });
@@ -7426,6 +7391,9 @@ firestoreStore.bindStateRefs({
 async function startServer() {
   try {
     await firestoreStore.hydrateFromCloud();
+    if (catalogManager && typeof catalogManager.purgeLegacyDefaults === 'function') {
+      catalogManager.purgeLegacyDefaults();
+    }
     if (profileAndMedals && typeof profileAndMedals.ensureDefaultMedalsSeeded === 'function') {
       profileAndMedals.ensureDefaultMedalsSeeded();
     }

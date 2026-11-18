@@ -9,98 +9,8 @@
  * 4. Live Profile Album Photos (max 4) & Custom Cover Background (bgUrl)
  */
 
-const DEFAULT_GIFT_LINKED_MEDALS = [
-  {
-    id: 'ach_multi_millionaire',
-    name: 'Multi-Millionaire',
-    category: 'ACHIEVEMENT',
-    starCount: 4,
-    description: 'Send total gift coins in voice rooms to upgrade 1★ to 4★.',
-    unlockCondition: '1★: 10L | 2★: 50L | 3★: 1Cr | 4★: 5Cr Coins',
-    iconUrl: '',
-    linkType: 'ALL_GIFTS_COINS',
-    linkedGiftId: '',
-    linkedGiftName: '',
-    starThresholds: [1000000, 5000000, 10000000, 50000000],
-    targetProgress: 1000000,
-    active: true,
-  },
-  {
-    id: 'g_rose_star',
-    name: 'Romantic Lover',
-    category: 'GIFT',
-    starCount: 4,
-    description: 'Send Rose gifts in voice chatrooms to upgrade star level.',
-    unlockCondition: '1★: 1L | 2★: 5L | 3★: 20L | 4★: 1Cr Coins',
-    iconUrl: '',
-    linkType: 'SPECIFIC_GIFT',
-    linkedGiftId: 'g_rose',
-    linkedGiftName: 'Rose',
-    starThresholds: [100000, 500000, 2000000, 10000000],
-    targetProgress: 100000,
-    active: true,
-  },
-  {
-    id: 'g_ferris_star',
-    name: 'Ferris Wheel Star',
-    category: 'GIFT',
-    starCount: 4,
-    description: 'Send Ferris Wheel gifts to unlock & upgrade 1★ to 4★.',
-    unlockCondition: '1★: 10L | 2★: 50L | 3★: 1Cr | 4★: 5Cr Coins',
-    iconUrl: '',
-    linkType: 'SPECIFIC_GIFT',
-    linkedGiftId: 'g_ferris',
-    linkedGiftName: 'Ferris Wheel',
-    starThresholds: [1000000, 5000000, 10000000, 50000000],
-    targetProgress: 1000000,
-    active: true,
-  },
-  {
-    id: 'g_castle_star',
-    name: 'Dream Castle Star',
-    category: 'GIFT',
-    starCount: 4,
-    description: 'Send Dream Castle gifts to unlock & upgrade 1★ to 4★.',
-    unlockCondition: '1★: 10L | 2★: 50L | 3★: 2Cr | 4★: 10Cr Coins',
-    iconUrl: '',
-    linkType: 'SPECIFIC_GIFT',
-    linkedGiftId: 'g_castle',
-    linkedGiftName: 'Dream Castle',
-    starThresholds: [1000000, 5000000, 20000000, 100000000],
-    targetProgress: 1000000,
-    active: true,
-  },
-  {
-    id: 'g_yacht_star',
-    name: 'Luxury Yacht Star',
-    category: 'GIFT',
-    starCount: 4,
-    description: 'Send Luxury Yacht gifts to unlock & upgrade 1★ to 4★.',
-    unlockCondition: '1★: 10L | 2★: 50L | 3★: 2Cr | 4★: 10Cr Coins',
-    iconUrl: '',
-    linkType: 'SPECIFIC_GIFT',
-    linkedGiftId: 'g_yacht',
-    linkedGiftName: 'Luxury Yacht',
-    starThresholds: [1000000, 5000000, 20000000, 100000000],
-    targetProgress: 1000000,
-    active: true,
-  },
-  {
-    id: 'g_dragon_star',
-    name: 'Dragon Master',
-    category: 'GIFT',
-    starCount: 4,
-    description: 'Send Golden Dragon gifts to unlock & upgrade 1★ to 4★.',
-    unlockCondition: '1★: 25L | 2★: 1Cr | 3★: 5Cr | 4★: 20Cr Coins',
-    iconUrl: '',
-    linkType: 'SPECIFIC_GIFT',
-    linkedGiftId: 'g_dragon',
-    linkedGiftName: 'Golden Dragon',
-    starThresholds: [2500000, 10000000, 50000000, 200000000],
-    targetProgress: 2500000,
-    active: true,
-  },
-];
+// Admin Panel is the single source of truth — zero pre-seeded hardcoded medals.
+const DEFAULT_GIFT_LINKED_MEDALS = [];
 
 function normalizeStarThresholds(rawThresholds, fallbackTarget = 1000000) {
   const base = Math.max(1, Math.floor(Number(fallbackTarget || 1000000)));
@@ -241,14 +151,9 @@ function initProfileAndMedalsModule(ctx) {
       const sentName = String(resolvedGiftName || '').trim().toLowerCase();
 
       let matches = false;
-      if (linkType === 'ALL_GIFTS_COINS' || medal.id === 'ach_multi_millionaire') {
+      if (linkType === 'ALL_GIFTS_COINS') {
         matches = true;
-      } else if (
-        linkType === 'SPECIFIC_GIFT' ||
-        medal.category === 'GIFT' ||
-        linkedId.length > 0 ||
-        linkedName.length > 0
-      ) {
+      } else if (linkType === 'SPECIFIC_GIFT') {
         if (linkedId && sentId && (linkedId === sentId || sentId.includes(linkedId))) {
           matches = true;
         } else if (linkedName && sentName && (linkedName === sentName || sentName.includes(linkedName))) {
@@ -365,61 +270,7 @@ function initProfileAndMedalsModule(ctx) {
     return false;
   }
 
-  // Enhanced Admin Medal Save Route (supports Gift Linking + 1★..4★ thresholds)
-  app.post('/api/admin/medals', requireAdminAuth, (req, res) => {
-    ensureDefaultMedalsSeeded();
-    const id = String(req.body.id || `m_${Date.now()}`).trim();
-    const name = String(req.body.name || '').trim();
-    const category = String(req.body.category || 'GIFT').trim().toUpperCase();
-    const starCount = Math.max(1, Math.min(4, Math.floor(Number(req.body.starCount || 4))));
-    const description = String(req.body.description || 'Official Gift-Linked Medal').trim();
-    const iconUrl = String(req.body.iconUrl || '').trim();
-    const linkType = String(
-      req.body.linkType || (req.body.linkedGiftId || req.body.linkedGiftName ? 'SPECIFIC_GIFT' : 'ALL_GIFTS_COINS')
-    )
-      .trim()
-      .toUpperCase();
-    const linkedGiftId = String(req.body.linkedGiftId || '').trim();
-    const linkedGiftName = String(req.body.linkedGiftName || '').trim();
-
-    const rawThresholds = Array.isArray(req.body.starThresholds)
-      ? req.body.starThresholds
-      : [
-          Number(req.body.star1Coins || req.body.targetProgress || 1000000),
-          Number(req.body.star2Coins || 5000000),
-          Number(req.body.star3Coins || 10000000),
-          Number(req.body.star4Coins || 50000000),
-        ];
-    const starThresholds = normalizeStarThresholds(rawThresholds, req.body.targetProgress || 1000000);
-    const targetProgress = starThresholds[0];
-    const unlockCondition =
-      String(req.body.unlockCondition || '').trim() ||
-      `1★: ${starThresholds[0].toLocaleString()} | 2★: ${starThresholds[1].toLocaleString()} | 3★: ${starThresholds[2].toLocaleString()} | 4★: ${starThresholds[3].toLocaleString()} Coins`;
-    const active = req.body.active !== false;
-
-    if (!name) return res.status(400).json({ error: 'Medal name required' });
-
-    const medal = {
-      id,
-      name,
-      category,
-      starCount,
-      description,
-      unlockCondition,
-      iconUrl,
-      linkType,
-      linkedGiftId,
-      linkedGiftName,
-      starThresholds,
-      targetProgress,
-      active,
-    };
-
-    DYNAMIC_MEDALS_CATALOG.set(id, medal);
-    broadcastDynamicCatalog();
-    firestoreStore.markGlobalDirty();
-    res.json({ ok: true, medal });
-  });
+  // Admin medal CRUD routes are mounted by /backend/catalog_manager/storeAndMedalCatalog.js
 
   // Track user safety strikes for NSFW / harmful photo attempts (3 strikes = auto photo lock)
   const userSafetyStrikes = new Map();
