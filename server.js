@@ -15,6 +15,16 @@ try {
     profileAndMedalsModule = null;
   }
 }
+let globalRocketBroadcastModule;
+try {
+  globalRocketBroadcastModule = require('./rocket_broadcast/globalRocketBroadcast');
+} catch (_) {
+  try {
+    globalRocketBroadcastModule = require('./backend/rocket_broadcast/globalRocketBroadcast');
+  } catch (__) {
+    globalRocketBroadcastModule = null;
+  }
+}
 let firestoreStore;
 try {
   firestoreStore = require('./firestoreStore');
@@ -4581,6 +4591,15 @@ app.post('/api/admin/rooms/close', requireAdminAuth, (req, res) => {
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, maxPayload: 4 * 1024 * 1024, perMessageDeflate: false });
+const globalRocketBroadcast = globalRocketBroadcastModule
+  ? globalRocketBroadcastModule.initGlobalRocketBroadcast({
+      wss,
+      rooms,
+      users,
+      resolveLiveUserAvatar,
+      safeSend,
+    })
+  : null;
 
 // Server-side WebSocket heartbeat to detect dead connections cleanly without kicking slow 4G/5G phones
 const pingInterval = setInterval(() => {
@@ -4612,6 +4631,7 @@ wss.on('connection', (ws, req) => {
   // Immediately push live rooms list + authoritative dynamic catalogs on connect
   safeSend(ws, { type: 'LIVE_ROOMS_UPDATE', serverNowMs: Date.now(), rooms: getLiveRoomsSummary() });
   safeSend(ws, buildDynamicCatalogPayload());
+  globalRocketBroadcast?.pushActiveBroadcasts(ws);
 
   ws.on('pong', () => {
     meta.missedPings = 0;
@@ -5587,6 +5607,17 @@ wss.on('connection', (ws, req) => {
                   winners,
                   launchedAtMs,
                 });
+                globalRocketBroadcast?.onRocketLaunched({
+                  room,
+                  level: lvl,
+                  topGifter: {
+                    userId: topGifter.userId,
+                    nickname: resolvedTopGifterName,
+                    avatarUri: resolvedTopGifterAvatar,
+                  },
+                  totalPoolCoins,
+                  launchId,
+                });
 
                 const sysMsg = {
                   id: `sys_rocket_${launchId}`,
@@ -5618,6 +5649,17 @@ wss.on('connection', (ws, req) => {
                   break;
                 }
               }
+            }
+
+            if (!rs.allLaunched) {
+              const afterLvl = Math.min(3, Math.max(1, Number(rs.level || 1)));
+              globalRocketBroadcast?.onRocketProgress({
+                room,
+                level: afterLvl,
+                currentExp: Number(rs.currentExp || 0),
+                targetExp: ROCKET_TARGETS[afterLvl] || ROCKET_TARGETS[1],
+                contributor: contribEntry,
+              });
             }
 
             const rocketPayload = buildRocketStatePayload(room);
@@ -5763,6 +5805,7 @@ wss.on('connection', (ws, req) => {
 
         broadcastToRoom(room, buildRoomSnapshot(room));
         safeSend(ws, buildContributionsPayload(room));
+        globalRocketBroadcast?.pushActiveBroadcasts(ws);
         broadcastLiveRoomsToHome();
         break;
       }
