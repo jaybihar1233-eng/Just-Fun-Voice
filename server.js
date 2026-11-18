@@ -2527,13 +2527,22 @@ app.get('/api/users', (req, res) => {
   res.json({ users: Array.from(users.values()).slice(0, 50) });
 });
 
+function getSortedEventsList() {
+  return Array.from(DYNAMIC_EVENTS_CATALOG.values()).sort((a, b) => {
+    const orderA = typeof a.sortOrder === 'number' ? a.sortOrder : 999;
+    const orderB = typeof b.sortOrder === 'number' ? b.sortOrder : 999;
+    if (orderA !== orderB) return orderA - orderB;
+    return (a.createdAtMs || 0) - (b.createdAtMs || 0);
+  });
+}
+
 function buildDynamicCatalogPayload() {
   return {
     type: 'DYNAMIC_CATALOG_SYNC',
     gifts: Array.from(DYNAMIC_GIFTS_CATALOG.values()),
     storeCatalog: Object.values(STORE_CATALOG),
     customMedals: Array.from(DYNAMIC_MEDALS_CATALOG.values()),
-    events: Array.from(DYNAMIC_EVENTS_CATALOG.values()),
+    events: getSortedEventsList(),
     rechargePacks: WALLET_RECHARGE_PACKS,
     rules: {
       maxUnfollowedDmMessages: MAX_UNFOLLOWED_DM_MESSAGES,
@@ -3720,7 +3729,7 @@ app.get('/api/admin/overview', requireAdminAuth, (req, res) => {
     gifts: Array.from(DYNAMIC_GIFTS_CATALOG.values()),
     storeCatalog: Object.values(STORE_CATALOG),
     customMedals: Array.from(DYNAMIC_MEDALS_CATALOG.values()),
-    events: Array.from(DYNAMIC_EVENTS_CATALOG.values()),
+    events: getSortedEventsList(),
     rechargePacks: WALLET_RECHARGE_PACKS,
     rules: {
       maxUnfollowedDmMessages: MAX_UNFOLLOWED_DM_MESSAGES,
@@ -4201,12 +4210,65 @@ app.post('/api/admin/broadcast', requireAdminAuth, (req, res) => {
 });
 
 app.post('/api/admin/events', requireAdminAuth, (req, res) => {
-  const id = `ev_${Date.now()}`;
-  const title = String(req.body.title || '').trim();
-  const subtitle = String(req.body.subtitle || '').trim();
-  const bannerUrl = String(req.body.bannerUrl || '').trim();
-  if (!title) return res.status(400).json({ error: 'Event title is required' });
-  const ev = { id, title, subtitle, bannerUrl, createdAtMs: Date.now() };
+  const rawId = String(req.body.id || '').trim();
+  const id = rawId || `ev_${Date.now()}`;
+  const existing = DYNAMIC_EVENTS_CATALOG.get(id) || {};
+  const title = String(req.body.title ?? existing.title ?? '').trim() || 'Official Event';
+  const subtitle = String(req.body.subtitle ?? existing.subtitle ?? '').trim();
+  const bannerUrl = String(req.body.bannerUrl ?? existing.bannerUrl ?? '').trim();
+  const rawAction = String(req.body.actionType ?? existing.actionType ?? 'WEBVIEW').trim().toUpperCase();
+  const allowedActions = [
+    'WEBVIEW',
+    'WALLET',
+    'INVITE',
+    'STORE',
+    'MY_ITEMS',
+    'LEVEL',
+    'MEDAL',
+    'CUSTOMER_SERVICE',
+    'ROOM',
+    'FEEDBACK',
+  ];
+  const actionType = allowedActions.includes(rawAction) ? rawAction : 'WEBVIEW';
+  let webUrl = String(req.body.webUrl ?? existing.webUrl ?? '').trim();
+  if (webUrl && !/^https?:\/\//i.test(webUrl) && !webUrl.startsWith('data:')) {
+    webUrl = 'https://' + webUrl;
+  }
+  const targetRoomId = String(req.body.targetRoomId ?? existing.targetRoomId ?? '').trim();
+  const sortOrder = req.body.sortOrder !== undefined && req.body.sortOrder !== ''
+    ? Math.max(1, Math.floor(Number(req.body.sortOrder) || 1))
+    : (existing.sortOrder || (DYNAMIC_EVENTS_CATALOG.size + 1));
+  const active = req.body.active !== undefined ? Boolean(req.body.active) : (existing.active !== false);
+
+  if (!bannerUrl && !title) {
+    return res.status(400).json({ error: 'Banner Image or Title is required' });
+  }
+
+  const ev = {
+    id,
+    title,
+    subtitle,
+    bannerUrl,
+    actionType,
+    webUrl,
+    targetRoomId,
+    sortOrder,
+    active,
+    createdAtMs: existing.createdAtMs || Date.now(),
+    updatedAtMs: Date.now(),
+  };
+  DYNAMIC_EVENTS_CATALOG.set(id, ev);
+  broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
+  res.json({ ok: true, event: ev, events: getSortedEventsList() });
+});
+
+app.post('/api/admin/events/toggle', requireAdminAuth, (req, res) => {
+  const id = String(req.body.id || '').trim();
+  const ev = DYNAMIC_EVENTS_CATALOG.get(id);
+  if (!ev) return res.status(404).json({ error: 'Banner not found' });
+  ev.active = req.body.active !== undefined ? Boolean(req.body.active) : !(ev.active !== false);
+  ev.updatedAtMs = Date.now();
   DYNAMIC_EVENTS_CATALOG.set(id, ev);
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
@@ -4218,7 +4280,14 @@ app.delete('/api/admin/events/:id', requireAdminAuth, (req, res) => {
   DYNAMIC_EVENTS_CATALOG.delete(id);
   broadcastDynamicCatalog();
   firestoreStore.markGlobalDirty();
-  res.json({ ok: true, deletedId: id });
+  res.json({ ok: true, deletedId: id, events: getSortedEventsList() });
+});
+
+app.delete('/api/admin/events', requireAdminAuth, (req, res) => {
+  DYNAMIC_EVENTS_CATALOG.clear();
+  broadcastDynamicCatalog();
+  firestoreStore.markGlobalDirty();
+  res.json({ ok: true, cleared: true, events: [] });
 });
 
 app.post('/api/admin/rules', requireAdminAuth, (req, res) => {
@@ -4483,6 +4552,7 @@ wss.on('connection', (ws, req) => {
       case 'SUBSCRIBE_HOME': {
         homeSubscribers.add(ws);
         safeSend(ws, { type: 'LIVE_ROOMS_UPDATE', serverNowMs: Date.now(), rooms: getLiveRoomsSummary() });
+        safeSend(ws, buildDynamicCatalogPayload());
         if (msg.userId) {
           const uid = String(msg.userId);
           meta.userId = uid;
@@ -7015,6 +7085,7 @@ firestoreStore.bindStateRefs({
       });
     }
     if (Array.isArray(doc.dynamicEvents)) {
+      DYNAMIC_EVENTS_CATALOG.clear();
       doc.dynamicEvents.forEach((ev) => {
         if (ev && ev.id) DYNAMIC_EVENTS_CATALOG.set(ev.id, ev);
       });
