@@ -2749,8 +2749,8 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
     }
     @media (max-width: 820px) {
       .layout { flex-direction: column; }
-      nav { width: 100%; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); }
-      .nav-btn { white-space: nowrap; }
+      nav { width: 100%; display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; border-right: none; border-bottom: 1px solid var(--border); }
+      .nav-btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; padding: 10px 10px; }
     }
   </style>
 </head>
@@ -2765,12 +2765,12 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
 
   <div class="layout">
     <nav>
-      <button class="nav-btn active" onclick="switchTab('users', this)">👤 Users, ID & Device Ban</button>
+      <button class="nav-btn active" onclick="switchTab('events', this)">🖼️ Popular Banners & Broadcast</button>
+      <button class="nav-btn" onclick="switchTab('users', this)">👤 Users, ID & Device Ban</button>
       <button class="nav-btn" onclick="switchTab('wallet', this)">💰 Wallet, Coins & Packs</button>
       <button class="nav-btn" onclick="switchTab('gifts', this)">🎁 Gifts Manager (API)</button>
       <button class="nav-btn" onclick="switchTab('store', this)">🏎️ Store: Frame / Car / Bubble</button>
       <button class="nav-btn" onclick="switchTab('medals', this)">🏅 Medals & Levels</button>
-      <button class="nav-btn" onclick="switchTab('events', this)">🎉 Events & Broadcast</button>
       <button class="nav-btn" onclick="switchTab('rules', this)">🛡️ Invite & Chat Rules</button>
       <button class="nav-btn" onclick="switchTab('rooms', this)">🎤 Live Rooms & Reports</button>
     </nav>
@@ -2785,7 +2785,7 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
         <div class="stat-card"><div class="stat-label">Unfollowed DM Limit</div><div class="stat-val" id="stDmLimit">5</div></div>
       </div>
 
-      <section class="panel active" id="panel-users">
+      <section class="panel" id="panel-users">
         <div class="card">
           <h3>🚫 Quick Ban / Unban User ID or Hardware Phone Device</h3>
           <div class="form-grid">
@@ -3021,7 +3021,7 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
         </div>
       </section>
 
-      <section class="panel" id="panel-events">
+      <section class="panel active" id="panel-events">
         <div class="card">
           <h3>📢 Send Real-Time Notification / Customer Service Message</h3>
           <div class="form-grid">
@@ -3036,17 +3036,71 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
           </div>
         </div>
 
-        <div class="card">
-          <h3>🎪 Manage Official Events & Home Banners</h3>
+        <div class="card" style="border-color: rgba(25,204,157,0.45); background: linear-gradient(145deg, #151c28, #13222d);">
+          <h3>🖼️ Live Popular Tab Banner Carousel Manager (Auto-Slides + Opens Screen or WebView on Tap)</h3>
+          <input type="hidden" id="evEditId" value="" />
           <div class="form-grid">
-            <input id="evTitle" placeholder="Event Title" />
-            <input id="evSubtitle" placeholder="Event Description / Rules" />
-            <input id="evBannerUrl" placeholder="Banner Image URL (https://...)" />
-            <button onclick="addEventBanner()">➕ Publish Event / Banner</button>
+            <input id="evTitle" placeholder="Banner / Event Title (e.g. Recharge Bonus)" />
+            <input id="evSubtitle" placeholder="Banner Subtitle / Rules Description" />
+            <select id="evActionType">
+              <option value="WEBVIEW">🌐 Open In-App WebView / Event Landing Page</option>
+              <option value="WALLET">💰 Open Wallet Screen (Coins &amp; Recharge)</option>
+              <option value="INVITE">🎁 Open Invite Friends Screen (Refer &amp; Earn)</option>
+              <option value="STORE">🏎️ Open Store Screen (Frames, Cars &amp; Bubbles)</option>
+              <option value="MY_ITEMS">🎒 Open My Items / Backpack Screen</option>
+              <option value="LEVEL">👑 Open Level &amp; EXP Privileges Screen</option>
+              <option value="MEDAL">🏅 Open Medals Wall Screen</option>
+              <option value="CUSTOMER_SERVICE">💬 Open Official Customer Service Chat</option>
+              <option value="ROOM">🎤 Join Target Voice Room Directly</option>
+              <option value="FEEDBACK">📝 Open Feedback &amp; Report Screen</option>
+            </select>
+            <input id="evWebUrl" placeholder="In-App WebView Link URL (if WebView selected, e.g. https://...)" />
+            <input id="evTargetRoomId" placeholder="Target Voice Room ID (if Join Room selected)" />
+            <input id="evSortOrder" type="number" min="1" value="1" placeholder="Slide Order (1, 2, 3...)" />
           </div>
-          <div style="overflow-x:auto;">
+
+          <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px; align-items:center;">
+            <div style="flex:1; min-width:250px; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px; display:flex; align-items:center; gap:12px;">
+              <img id="evBannerPreview" src="" alt="" style="display:none; width:110px; height:42px; object-fit:cover; border-radius:8px; border:1px solid var(--accent); flex-shrink:0;" />
+              <div style="flex:1; min-width:0;">
+                <input type="file" id="evBannerFile" accept="image/*" style="display:none;" onchange="onBannerFileSelected(this)" />
+                <button type="button" onclick="document.getElementById('evBannerFile').click()" style="width:100%; background:#1f3348; color:#4de8c0; border:1px solid #19cc9d;">
+                  🖼️ Upload Banner Photo from Phone / PC Gallery
+                </button>
+                <div id="evBannerFileName" style="margin-top:6px; font-size:12px; color:var(--muted); word-break:break-all;">
+                  No gallery image selected
+                </div>
+              </div>
+            </div>
+            <div style="flex:1; min-width:240px;">
+              <input id="evBannerUrl" placeholder="OR Paste Direct Banner Image URL (https://...)" style="width:100%;" oninput="onBannerUrlTyped(this.value)" />
+            </div>
+          </div>
+
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button id="btnPublishBanner" onclick="addEventBanner()" style="flex:1; min-width:220px; padding:12px 18px; font-size:14.5px;">
+              🚀 Upload &amp; Publish Live Banner
+            </button>
+            <button id="btnCancelBannerEdit" class="secondary" onclick="resetBannerForm()" style="display:none;">
+              ✖ Cancel Edit
+            </button>
+            <button class="danger" onclick="deleteAllEventBanners()">
+              🗑️ Delete All Banners
+            </button>
+          </div>
+
+          <div style="overflow-x:auto; margin-top:16px;">
             <table>
-              <thead><tr><th>ID</th><th>Title</th><th>Description</th><th>Banner URL</th><th>Action</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Banner Preview</th>
+                  <th>Title &amp; Description</th>
+                  <th>Click Target / Action</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
               <tbody id="eventsTableBody"></tbody>
             </table>
           </div>
@@ -3220,13 +3274,46 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
         document.getElementById('customMedalsPreview').innerHTML = (d.customMedals || [])
           .map(m => '<span class="badge ok" style="margin:4px 6px 4px 0; display:inline-flex; align-items:center; gap:6px;">🏅 ' + m.id + ': ' + m.name + ' (' + (m.linkedGiftName ? ('Gift: ' + m.linkedGiftName) : (m.category || 'ACHIEVEMENT')) + ' | 1★:' + ((m.starThresholds && m.starThresholds[0]) || m.targetProgress || 1000000).toLocaleString() + ') <a href="#" style="color:#ff8a80; text-decoration:none; font-weight:800;" onclick="deleteCustomMedal(\\'' + m.id + '\\');return false;">✕</a></span>').join('') || 'No custom medals added yet.';
 
-        document.getElementById('eventsTableBody').innerHTML = (d.events || []).map(ev => '<tr>' +
-          '<td>' + ev.id + '</td>' +
-          '<td><b>' + ev.title + '</b></td>' +
-          '<td>' + ev.subtitle + '</td>' +
-          '<td style="font-size:11px; color:var(--muted);">' + (ev.bannerUrl || 'Default') + '</td>' +
-          '<td><button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteEvent(\\'' + ev.id + '\\')">Delete</button></td>' +
-        '</tr>').join('');
+        window._loadedEvents = d.events || [];
+        const actionLabels = {
+          WALLET: '💰 Opens Wallet Screen',
+          INVITE: '🎁 Opens Invite Friends Screen',
+          STORE: '🏎️ Opens Store Screen',
+          MY_ITEMS: '🎒 Opens My Items Screen',
+          LEVEL: '👑 Opens Level Screen',
+          MEDAL: '🏅 Opens Medals Screen',
+          CUSTOMER_SERVICE: '💬 Opens Customer Service Chat',
+          ROOM: '🎤 Joins Voice Room',
+          FEEDBACK: '📝 Opens Feedback Screen',
+          WEBVIEW: '🌐 Opens In-App WebView'
+        };
+        document.getElementById('eventsTableBody').innerHTML = (d.events || []).map(function(ev, idx) {
+          const isActive = ev.active !== false;
+          const act = String(ev.actionType || 'WEBVIEW').toUpperCase();
+          const cleanImg = String(ev.bannerUrl || '').split('#jfmeta=')[0];
+          const thumbHtml = cleanImg
+            ? '<img src="' + cleanImg + '" style="width:124px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--border);" />'
+            : '<span style="font-size:11px;color:var(--muted);">Default Banner</span>';
+          let clickInfo = '';
+          if (act !== 'WEBVIEW') {
+            clickInfo = '<span class="badge ok" style="font-size:11.5px;">' + (actionLabels[act] || act) + (act === 'ROOM' && ev.targetRoomId ? ' (#' + ev.targetRoomId + ')' : '') + '</span>';
+          } else if (ev.webUrl) {
+            clickInfo = '<a href="' + ev.webUrl + '" target="_blank" style="color:var(--accent);font-size:12px;word-break:break-all;">🌐 ' + ev.webUrl + '</a>';
+          } else {
+            clickInfo = '<span style="font-size:12px;color:var(--muted);">📄 Built-in Event WebView' + (ev.targetRoomId ? ' (Room: ' + ev.targetRoomId + ')' : '') + '</span>';
+          }
+          return '<tr>' +
+            '<td><b>#' + (ev.sortOrder || (idx + 1)) + '</b></td>' +
+            '<td>' + thumbHtml + '</td>' +
+            '<td><b>' + (ev.title || '-') + '</b><div style="font-size:11.5px;color:var(--muted);max-width:260px;margin-top:2px;">' + (ev.subtitle || '') + '</div></td>' +
+            '<td>' + clickInfo + '</td>' +
+            '<td><span class="badge ' + (isActive ? 'ok' : 'ban') + '">' + (isActive ? 'LIVE' : 'PAUSED') + '</span></td>' +
+            '<td><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+              '<button class="secondary" style="padding:5px 9px; font-size:11px;" onclick="toggleEventBanner(\\'' + ev.id + '\\', ' + (!isActive) + ')">' + (isActive ? '⏸️ Pause' : '▶️ Live') + '</button>' +
+              '<button class="secondary" style="padding:5px 9px; font-size:11px;" onclick="editEventBanner(\\'' + ev.id + '\\')">✏️ Edit</button>' +
+              '<button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteEvent(\\'' + ev.id + '\\')">🗑️ Delete</button>' +
+            '</div></td></tr>';
+        }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:18px;">No custom banners published yet. Upload a banner above to push it live!</td></tr>';
 
         document.getElementById('roomsTableBody').innerHTML = (d.rooms || []).map(r => '<tr>' +
           '<td><b>' + r.id + '</b></td>' +
@@ -3614,15 +3701,155 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
       } catch (e) { showToast(e.message, true); }
     }
 
-    async function addEventBanner() {
-      try {
-        const body = {
-          title: document.getElementById('evTitle').value.trim(),
-          subtitle: document.getElementById('evSubtitle').value.trim(),
-          bannerUrl: document.getElementById('evBannerUrl').value.trim()
+    var selectedBannerDataUrl = '';
+    function compressImageFileToDataUrl(file, maxW, maxH, quality) {
+      return new Promise(function(resolve, reject) {
+        const reader = new FileReader();
+        reader.onerror = function() { reject(new Error('Failed to read image file')); };
+        reader.onload = function() {
+          const img = new Image();
+          img.onerror = function() { resolve(reader.result); };
+          img.onload = function() {
+            const scale = Math.min(1, (maxW || 1080) / img.width, (maxH || 420) / img.height);
+            const w = Math.max(1, Math.round(img.width * scale));
+            const h = Math.max(1, Math.round(img.height * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', quality || 0.86));
+          };
+          img.src = reader.result;
         };
-        await api('/api/admin/events', 'POST', body);
-        showToast('Event / Banner published!');
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function onBannerFileSelected(input) {
+      const f = input.files && input.files[0];
+      const label = document.getElementById('evBannerFileName');
+      const preview = document.getElementById('evBannerPreview');
+      if (!f) {
+        selectedBannerDataUrl = '';
+        label.textContent = 'No gallery image selected';
+        preview.style.display = 'none';
+        return;
+      }
+      label.textContent = '⏳ Processing ' + f.name + '...';
+      selectedBannerDataUrl = await compressImageFileToDataUrl(f, 1080, 420, 0.86);
+      label.textContent = '✅ Ready: ' + f.name;
+      preview.src = selectedBannerDataUrl;
+      preview.style.display = 'block';
+    }
+
+    function onBannerUrlTyped(url) {
+      const trimmed = (url || '').trim();
+      const preview = document.getElementById('evBannerPreview');
+      if (trimmed) {
+        preview.src = trimmed;
+        preview.style.display = 'block';
+      } else if (!selectedBannerDataUrl) {
+        preview.style.display = 'none';
+      }
+    }
+
+    function resetBannerForm() {
+      document.getElementById('evEditId').value = '';
+      document.getElementById('evTitle').value = '';
+      document.getElementById('evSubtitle').value = '';
+      document.getElementById('evActionType').value = 'WEBVIEW';
+      document.getElementById('evWebUrl').value = '';
+      document.getElementById('evTargetRoomId').value = '';
+      document.getElementById('evSortOrder').value = ((window._loadedEvents || []).length + 1);
+      document.getElementById('evBannerUrl').value = '';
+      document.getElementById('evBannerFile').value = '';
+      selectedBannerDataUrl = '';
+      document.getElementById('evBannerFileName').textContent = 'No gallery image selected';
+      document.getElementById('evBannerPreview').style.display = 'none';
+      document.getElementById('btnPublishBanner').textContent = '🚀 Upload & Publish Live Banner';
+      document.getElementById('btnCancelBannerEdit').style.display = 'none';
+    }
+
+    function editEventBanner(id) {
+      const ev = (window._loadedEvents || []).find(function(x) { return x.id === id; });
+      if (!ev) return;
+      const cleanImg = String(ev.bannerUrl || '').split('#jfmeta=')[0];
+      document.getElementById('evEditId').value = ev.id;
+      document.getElementById('evTitle').value = ev.title || '';
+      document.getElementById('evSubtitle').value = ev.subtitle || '';
+      document.getElementById('evActionType').value = String(ev.actionType || 'WEBVIEW').toUpperCase();
+      document.getElementById('evWebUrl').value = ev.webUrl || '';
+      document.getElementById('evTargetRoomId').value = ev.targetRoomId || '';
+      document.getElementById('evSortOrder').value = ev.sortOrder || 1;
+      document.getElementById('evBannerUrl').value = (cleanImg && !cleanImg.startsWith('data:')) ? cleanImg : '';
+      selectedBannerDataUrl = (cleanImg && cleanImg.startsWith('data:')) ? cleanImg : '';
+      const preview = document.getElementById('evBannerPreview');
+      if (cleanImg) {
+        preview.src = cleanImg;
+        preview.style.display = 'block';
+      } else {
+        preview.style.display = 'none';
+      }
+      document.getElementById('btnPublishBanner').textContent = '💾 Save Updated Banner Live';
+      document.getElementById('btnCancelBannerEdit').style.display = 'inline-block';
+    }
+
+    async function addEventBanner() {
+      const btn = document.getElementById('btnPublishBanner');
+      try {
+        const id = document.getElementById('evEditId').value.trim();
+        const title = document.getElementById('evTitle').value.trim() || 'Official Event';
+        const subtitle = document.getElementById('evSubtitle').value.trim();
+        const actionType = document.getElementById('evActionType').value || 'WEBVIEW';
+        const webUrl = document.getElementById('evWebUrl').value.trim();
+        const targetRoomId = document.getElementById('evTargetRoomId').value.trim();
+        const sortOrder = Number(document.getElementById('evSortOrder').value || 1);
+        let bannerUrl = document.getElementById('evBannerUrl').value.trim();
+        const fileInput = document.getElementById('evBannerFile');
+        const rawFile = fileInput && fileInput.files && fileInput.files[0];
+        btn.disabled = true;
+        btn.textContent = '⏳ Uploading & Publishing...';
+        if (!bannerUrl && rawFile) {
+          try {
+            const iconSign = await api('/api/admin/cloudinary/sign', 'POST', { kind: 'icon' });
+            if (iconSign && iconSign.uploadUrl && iconSign.apiKey) {
+              bannerUrl = await uploadDirectToCloudinary(iconSign, rawFile, function() {});
+            }
+          } catch (_) {
+            bannerUrl = selectedBannerDataUrl;
+          }
+        }
+        if (!bannerUrl && selectedBannerDataUrl) bannerUrl = selectedBannerDataUrl;
+        if (!bannerUrl) throw new Error('Please upload a Banner Photo from Gallery or paste a Banner Image URL');
+        await api('/api/admin/events', 'POST', {
+          id,
+          title,
+          subtitle,
+          bannerUrl,
+          actionType,
+          webUrl,
+          targetRoomId,
+          sortOrder,
+          active: true
+        });
+        showToast(id ? 'Banner updated & pushed live to Popular!' : 'New Banner published live to Popular!');
+        resetBannerForm();
+        loadAll();
+      } catch (e) {
+        showToast(e.message, true);
+      } finally {
+        btn.disabled = false;
+        if (!document.getElementById('evEditId').value) {
+          btn.textContent = '🚀 Upload & Publish Live Banner';
+        }
+      }
+    }
+
+    async function toggleEventBanner(id, active) {
+      try {
+        await api('/api/admin/events/toggle', 'POST', { id, active });
+        showToast(active ? 'Banner is now LIVE!' : 'Banner paused!');
         loadAll();
       } catch (e) { showToast(e.message, true); }
     }
@@ -3630,7 +3857,18 @@ const EMBEDDED_ADMIN_HTML = `<!DOCTYPE html>
     async function deleteEvent(id) {
       try {
         await api('/api/admin/events/' + encodeURIComponent(id), 'DELETE');
-        showToast('Event deleted!');
+        showToast('Banner deleted live!');
+        if (document.getElementById('evEditId').value === id) resetBannerForm();
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteAllEventBanners() {
+      if (!confirm('Are you sure you want to delete ALL banners from Popular?')) return;
+      try {
+        await api('/api/admin/events', 'DELETE');
+        showToast('All banners deleted live!');
+        resetBannerForm();
         loadAll();
       } catch (e) { showToast(e.message, true); }
     }
@@ -3678,6 +3916,12 @@ app.get(['/admin', '/admin.html'], (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
+  try {
+    const diskHtml = fs.readFileSync(path.join(__dirname, 'admin.html'), 'utf8');
+    if (diskHtml && diskHtml.includes('<!DOCTYPE html>')) {
+      return res.status(200).send(diskHtml);
+    }
+  } catch (_) {}
   res.status(200).send(EMBEDDED_ADMIN_HTML);
 });
 
