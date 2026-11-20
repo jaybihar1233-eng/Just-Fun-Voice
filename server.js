@@ -12,7 +12,11 @@ try {
   try {
     profileAndMedalsModule = require('./backend/modules/profileAndMedalsModule');
   } catch (__) {
-    profileAndMedalsModule = null;
+    try {
+      profileAndMedalsModule = require('./profileAndMedalsModule');
+    } catch (___) {
+      profileAndMedalsModule = null;
+    }
   }
 }
 let globalRocketBroadcastModule;
@@ -22,7 +26,11 @@ try {
   try {
     globalRocketBroadcastModule = require('./backend/rocket_broadcast/globalRocketBroadcast');
   } catch (__) {
-    globalRocketBroadcastModule = null;
+    try {
+      globalRocketBroadcastModule = require('./globalRocketBroadcast');
+    } catch (___) {
+      globalRocketBroadcastModule = null;
+    }
   }
 }
 let storeAndMedalCatalogModule;
@@ -32,7 +40,11 @@ try {
   try {
     storeAndMedalCatalogModule = require('./backend/catalog_manager/storeAndMedalCatalog');
   } catch (__) {
-    storeAndMedalCatalogModule = null;
+    try {
+      storeAndMedalCatalogModule = require('./storeAndMedalCatalog');
+    } catch (___) {
+      storeAndMedalCatalogModule = null;
+    }
   }
 }
 let firestoreStore;
