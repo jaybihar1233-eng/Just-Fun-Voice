@@ -5838,6 +5838,8 @@ wss.on('connection', (ws, req) => {
               occupiedUserId: null,
               occupiedNickname: null,
               occupiedAvatarUri: null,
+              occupiedFrameUrl: null,
+              occupiedFrameScalePercent: 128,
               isSpeaking: false,
               isMuted: effForceMuted,
             };

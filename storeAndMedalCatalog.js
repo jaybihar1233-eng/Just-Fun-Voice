@@ -424,7 +424,7 @@ function initStoreAndMedalCatalog(ctx) {
     const parsedColor = parseHexColor(req.body.micWaveColorHex !== undefined ? req.body.micWaveColorHex : prev.micWaveColorHex);
     const frameScalePercent = Math.max(
       90,
-      Math.min(180, Math.round(Number(req.body.frameScalePercent ?? prev.frameScalePercent ?? 128) || 128))
+      Math.min(280, Math.round(Number(req.body.frameScalePercent ?? prev.frameScalePercent ?? 128) || 128))
     );
     const active = req.body.active !== false;
 
