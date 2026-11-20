@@ -422,6 +422,10 @@ function initStoreAndMedalCatalog(ctx) {
       ? String(req.body.sampleBubbleText || '').trim()
       : (prev.sampleBubbleText || 'Welcome to Just Fun Voice Party! 🎤');
     const parsedColor = parseHexColor(req.body.micWaveColorHex !== undefined ? req.body.micWaveColorHex : prev.micWaveColorHex);
+    const frameScalePercent = Math.max(
+      90,
+      Math.min(180, Math.round(Number(req.body.frameScalePercent ?? prev.frameScalePercent ?? 128) || 128))
+    );
     const active = req.body.active !== false;
 
     STORE_CATALOG[id] = {
@@ -437,6 +441,7 @@ function initStoreAndMedalCatalog(ctx) {
       hasAnimationPlay,
       iconUrl,
       animationUrl,
+      frameScalePercent,
       specialIdNumber,
       sampleBubbleText,
       micWaveColorHex: parsedColor !== null ? parsedColor : (category === 'MIC_WAVE' ? 0xFF19CC9D : undefined),

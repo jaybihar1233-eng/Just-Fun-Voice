@@ -260,12 +260,12 @@
 
           <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
             <div style="flex:1; min-width:240px; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px;">
-              <input type="file" id="mp4VideoFile" accept="video/mp4" style="display:none;" onchange="onMp4VideoSelected(this)" />
+              <input type="file" id="mp4VideoFile" accept="video/mp4,image/gif,image/webp" style="display:none;" onchange="onMp4VideoSelected(this)" />
               <button type="button" id="btnSelectMp4Video" onclick="document.getElementById('mp4VideoFile').click()" style="width:100%; background:#1f3348; color:#4de8c0; border:1px solid #19cc9d;">
-                🎥 Select MP4 Video
+                🎥 Select MP4 Video / GIF / WebP
               </button>
               <div id="mp4VideoFileName" style="margin-top:8px; font-size:12px; color:var(--muted); word-break:break-all;">
-                No MP4 video selected yet (MIME: video/mp4)
+                No MP4 / GIF / WebP animation selected yet
               </div>
             </div>
 
@@ -432,24 +432,47 @@
           <!-- Direct Media Upload Boxes -->
           <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px; margin-bottom:14px;">
             <div style="padding:12px; background:rgba(0,0,0,0.22); border:1px dashed var(--border); border-radius:10px;">
-              <label class="stat-label">1. Artwork / Theme / Thumbnail Image (Gallery/PC Upload)</label>
-              <input type="file" id="stIconFile" accept="image/*" style="display:none" onchange="onStoreIconFileSelected(this)" />
+              <label class="stat-label">1. Artwork / Theme / Frame / GIF Image (Gallery/PC Upload)</label>
+              <input type="file" id="stIconFile" accept="image/*,.gif,.webp,.png,.jpg,.jpeg" style="display:none" onchange="onStoreIconFileSelected(this)" />
               <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
-                <button type="button" class="secondary" onclick="document.getElementById('stIconFile').click()">📁 Choose Image</button>
+                <button type="button" class="secondary" onclick="document.getElementById('stIconFile').click()">📁 Choose Image / GIF / WebP</button>
                 <span id="stIconFileName" style="font-size:12px; color:var(--muted);">No image selected</span>
               </div>
-              <input id="stItemIconUrl" placeholder="Or paste Image URL (https://...)" oninput="previewStoreIconUrl(this.value)" style="width:100%; margin-top:8px;" />
-              <img id="stIconPreview" src="" style="display:none; width:84px; height:84px; object-fit:cover; border-radius:10px; border:1px solid var(--border); margin-top:8px;" />
+              <input id="stItemIconUrl" placeholder="Or paste Image / GIF URL (https://...)" oninput="previewStoreIconUrl(this.value)" style="width:100%; margin-top:8px;" />
+              <img id="stIconPreview" src="" style="display:none; width:84px; height:84px; object-fit:contain; border-radius:10px; border:1px solid var(--border); background:#0f162a; margin-top:8px;" />
             </div>
 
             <div style="padding:12px; background:rgba(0,0,0,0.22); border:1px dashed var(--border); border-radius:10px;">
-              <label class="stat-label">2. Optional Animation Effect (MP4 / WebP / GIF for Entry Effect / Theme)</label>
-              <input type="file" id="stAnimFile" accept="video/mp4,image/webp,image/gif" style="display:none" onchange="onStoreAnimFileSelected(this)" />
+              <label class="stat-label">2. Optional Animation Effect (MP4 / GIF / WebP for Entry Effect / Frame)</label>
+              <input type="file" id="stAnimFile" accept="video/mp4,video/webm,image/gif,image/webp,.mp4,.gif,.webp" style="display:none" onchange="onStoreAnimFileSelected(this)" />
               <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
-                <button type="button" class="secondary" onclick="document.getElementById('stAnimFile').click()">🎬 Choose MP4 / WebP</button>
+                <button type="button" class="secondary" onclick="document.getElementById('stAnimFile').click()">🎬 Choose MP4 / GIF / WebP</button>
                 <span id="stAnimFileName" style="font-size:12px; color:var(--muted);">Optional animation file</span>
               </div>
-              <input id="stItemAnimUrl" placeholder="Or paste MP4 / Animation URL (https://...)" style="width:100%; margin-top:8px;" />
+              <input id="stItemAnimUrl" placeholder="Or paste MP4 / GIF / WebP URL (https://...)" oninput="previewStoreAnimUrl(this.value)" style="width:100%; margin-top:8px;" />
+              <img id="stAnimPreview" src="" style="display:none; width:84px; height:84px; object-fit:contain; border-radius:10px; border:1px solid var(--border); background:#0f162a; margin-top:8px;" />
+            </div>
+          </div>
+
+          <!-- Live Avatar Frame Circular DP Preview & Uniform Size Slider -->
+          <div id="stFrameDpPreviewWrap" style="display:none; padding:14px; background:rgba(25,204,157,0.06); border:1px solid rgba(25,204,157,0.28); border-radius:12px; margin-bottom:14px;">
+            <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+              <div style="position:relative; width:132px; height:132px; display:flex; align-items:center; justify-content:center; background:#0b1120; border-radius:14px; border:1px solid var(--border); overflow:hidden;">
+                <div style="width:74px; height:74px; border-radius:50%; background:linear-gradient(135deg,#2563eb,#19cc9d); display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; font-size:20px; border:2px solid #ffe066;">DP</div>
+                <img id="stFrameDpOverlay" src="" style="display:none; position:absolute; width:95px; height:95px; object-fit:contain; pointer-events:none;" />
+              </div>
+              <div style="flex:1; min-width:220px;">
+                <div style="font-weight:700; font-size:13.5px; color:#4de8c0; margin-bottom:6px;">🖼️ Live Avatar Frame DP Preview &amp; Size Control</div>
+                <p style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+                  Ye slider app ki <b>Me, Profile, Chat aur Voice Room</b> sabhi screens par frame ko ek barabar ratio me set karta hai!
+                </p>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                  <label class="stat-label" style="margin:0;">Frame Size (%):</label>
+                  <input id="stFrameScaleRange" type="range" min="100" max="175" value="128" oninput="onStoreFrameScaleChanged(this.value)" style="flex:1; min-width:140px; accent-color:#19cc9d;" />
+                  <input id="stFrameScale" type="number" min="100" max="180" value="128" oninput="onStoreFrameScaleChanged(this.value)" style="width:76px;" />
+                  <span id="stFrameScaleBadge" class="badge ok">128%</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1342,12 +1365,15 @@
       thumbBtn.disabled = true;
 
       try {
-        setMp4UploadProgress(1, 'Preparing direct Cloudinary video upload...');
-        const videoSign = await api('/api/admin/cloudinary/sign', 'POST', { kind: 'video' });
+        const isVideoGiftFile = Boolean(videoFile.type && videoFile.type.startsWith('video/')) ||
+          /\.(mp4|webm|mov|mkv)$/i.test(videoFile.name || '');
+        const animSignKind = isVideoGiftFile ? 'video' : 'icon';
+        setMp4UploadProgress(1, `Preparing direct Cloudinary ${isVideoGiftFile ? 'MP4 video' : 'GIF/WebP'} upload...`);
+        const videoSign = await api('/api/admin/cloudinary/sign', 'POST', { kind: animSignKind });
         const videoUrl = await uploadDirectToCloudinary(
           videoSign,
           videoFile,
-          (f) => setMp4UploadProgress(2 + f * 73, 'Uploading MP4 video directly to Cloudinary...')
+          (f) => setMp4UploadProgress(2 + f * 73, `Uploading ${isVideoGiftFile ? 'MP4 video' : 'GIF/WebP animation'} directly to Cloudinary...`)
         );
 
         setMp4UploadProgress(76, 'Preparing direct Cloudinary thumbnail upload...');
@@ -1363,11 +1389,11 @@
           name,
           price,
           category,
-          tag,
+          tag: tag || (isVideoGiftFile ? 'MP4' : 'GIF'),
           videoUrl,
           iconUrl,
-          type: 'mp4',
-          durationSeconds: 5.5
+          type: isVideoGiftFile ? 'mp4' : 'gif',
+          durationSeconds: isVideoGiftFile ? 5.5 : 4.0
         });
 
         setMp4UploadProgress(100, 'Gift uploaded to Cloudinary & saved!');
@@ -1480,18 +1506,56 @@
       document.getElementById('stItemName').focus();
     }
 
+    function updateStoreFrameDpOverlay() {
+      const ov = document.getElementById('stFrameDpOverlay');
+      if (!ov) return;
+      const iconPrev = document.getElementById('stIconPreview');
+      const animPrev = document.getElementById('stAnimPreview');
+      const iconUrl = (document.getElementById('stItemIconUrl')?.value || '').trim();
+      const animUrl = (document.getElementById('stItemAnimUrl')?.value || '').trim();
+      let src = '';
+      if (animPrev && animPrev.style.display !== 'none' && animPrev.src) src = animPrev.src;
+      else if (iconPrev && iconPrev.style.display !== 'none' && iconPrev.src) src = iconPrev.src;
+      else if (animUrl && !/\.mp4(\?|$)/i.test(animUrl)) src = animUrl;
+      else if (iconUrl) src = iconUrl;
+      if (src) {
+        ov.src = src;
+        ov.style.display = 'block';
+      } else {
+        ov.style.display = 'none';
+      }
+      const scaleVal = Math.max(100, Math.min(180, Number(document.getElementById('stFrameScale')?.value || 128)));
+      const px = Math.round(74 * (scaleVal / 100));
+      ov.style.width = px + 'px';
+      ov.style.height = px + 'px';
+    }
+
+    function onStoreFrameScaleChanged(val) {
+      const n = Math.max(100, Math.min(180, Math.round(Number(val || 128))));
+      const numEl = document.getElementById('stFrameScale');
+      const rngEl = document.getElementById('stFrameScaleRange');
+      const bdgEl = document.getElementById('stFrameScaleBadge');
+      if (numEl) numEl.value = String(n);
+      if (rngEl) rngEl.value = String(Math.min(175, n));
+      if (bdgEl) bdgEl.textContent = n + '%';
+      updateStoreFrameDpOverlay();
+    }
+
     function onStoreCategoryChanged() {
       const cat = document.getElementById('stItemCat').value;
       document.getElementById('stSpecialIdWrap').style.display = cat === 'SPECIAL_ID' ? 'block' : 'none';
       document.getElementById('stBubbleTextWrap').style.display = cat === 'BUBBLE' ? 'block' : 'none';
       document.getElementById('stMicColorWrap').style.display = cat === 'MIC_WAVE' ? 'block' : 'none';
+      const frameWrap = document.getElementById('stFrameDpPreviewWrap');
+      if (frameWrap) frameWrap.style.display = cat === 'FRAME' ? 'block' : 'none';
+      if (cat === 'FRAME') updateStoreFrameDpOverlay();
       const hintEl = document.getElementById('stCatHint');
       if (hintEl) {
         const hints = {
-          VEHICLE: '🏎️ Entry Effect (Vehicle): Upload Thumbnail Icon + Optional MP4 Video / WebP animation that plays when entering a Voice Room!',
-          THEME: '🎨 Room Theme: Upload a 9:16 Room Background photo. When user equips it, it becomes their Voice Room wallpaper!',
-          FRAME: '🖼️ Avatar Frame: Upload a transparent PNG / WebP avatar frame border. Appears around user Avatar in Profile, Me & Room Seats!',
-          BUBBLE: '💬 Chat Bubble: Upload a Chat Bubble background image and set sample preview text.',
+          VEHICLE: '🏎️ Entry Effect: Upload Thumbnail Icon (PNG/GIF/WebP) + Optional MP4 Video / GIF / WebP animation!',
+          THEME: '🎨 Room Theme: Upload a 9:16 Room Background photo / GIF. When user equips it, it becomes their Voice Room wallpaper!',
+          FRAME: '🖼️ Avatar Frame: Upload a transparent PNG / Animated WebP / Animated GIF frame! Adjust size % on live DP preview below.',
+          BUBBLE: '💬 Chat Bubble: Upload a Chat Bubble background image / GIF and set sample preview text.',
           MIC_WAVE: '〰️ Mic Wave: Upload icon & pick the glowing Mic Wave hex color.',
           SPECIAL_ID: '🆔 VIP Special ID: Enter the VIP ID number (e.g. 888888) and upload badge icon.'
         };
@@ -1512,25 +1576,49 @@
         selectedStoreIconDataUrl = '';
         lbl.textContent = 'No image selected';
         prev.style.display = 'none';
+        updateStoreFrameDpOverlay();
         return;
       }
       try {
-        selectedStoreIconDataUrl = await compressImageFileToDataUrl(f, 900, 900, 0.90, true);
-        lbl.textContent = '✅ ' + f.name;
+        const mime = String(f.type || '').toLowerCase();
+        const isAnimatedFmt = mime.includes('gif') || mime.includes('webp') || /\.gif$/i.test(f.name || '') || /\.webp$/i.test(f.name || '');
+        if (isAnimatedFmt) {
+          selectedStoreIconDataUrl = f.size <= 600000
+            ? await new Promise((res, rej) => { const r = new FileReader(); r.onload = (e) => res(e.target.result); r.onerror = () => rej(new Error('GIF read failed')); r.readAsDataURL(f); })
+            : '';
+        } else {
+          selectedStoreIconDataUrl = await compressImageFileToDataUrl(f, 900, 900, 0.90, true);
+        }
+        const mb = (f.size / (1024 * 1024)).toFixed(2);
+        lbl.textContent = '✅ ' + f.name + ' (' + mb + ' MB)';
         prev.src = URL.createObjectURL(f);
         prev.style.display = 'block';
+        updateStoreFrameDpOverlay();
       } catch (e) { showToast(e.message, true); }
     }
 
     function onStoreAnimFileSelected(input) {
       const f = input.files && input.files[0];
       const lbl = document.getElementById('stAnimFileName');
+      const animPrev = document.getElementById('stAnimPreview');
       if (!f) {
         lbl.textContent = 'Optional animation file';
+        if (animPrev) animPrev.style.display = 'none';
+        updateStoreFrameDpOverlay();
         return;
       }
       const mb = (f.size / (1024 * 1024)).toFixed(2);
       lbl.textContent = '✅ ' + f.name + ' (' + mb + ' MB)';
+      const isImgAnim = String(f.type || '').startsWith('image/') || /\.(gif|webp|png|jpg|jpeg)$/i.test(f.name || '');
+      if (animPrev) {
+        if (isImgAnim) {
+          animPrev.src = URL.createObjectURL(f);
+          animPrev.style.display = 'block';
+        } else {
+          animPrev.style.display = 'none';
+        }
+      }
+      updateStoreFrameDpOverlay();
     }
 
     function previewStoreIconUrl(u) {
@@ -1538,9 +1626,24 @@
       if ((u || '').trim()) {
         prev.src = u.trim();
         prev.style.display = 'block';
-      } else if (!selectedStoreIconDataUrl) {
+      } else if (!selectedStoreIconDataUrl && !(document.getElementById('stIconFile')?.files?.[0])) {
         prev.style.display = 'none';
       }
+      updateStoreFrameDpOverlay();
+    }
+
+    function previewStoreAnimUrl(u) {
+      const animPrev = document.getElementById('stAnimPreview');
+      const clean = (u || '').trim();
+      if (animPrev) {
+        if (clean && !/\.mp4(\?|$)/i.test(clean)) {
+          animPrev.src = clean;
+          animPrev.style.display = 'block';
+        } else if (!(document.getElementById('stAnimFile')?.files?.[0])) {
+          animPrev.style.display = 'none';
+        }
+      }
+      updateStoreFrameDpOverlay();
     }
 
     function resetStoreForm() {
@@ -1564,6 +1667,9 @@
       document.getElementById('stIconFileName').textContent = 'No image selected';
       document.getElementById('stAnimFileName').textContent = 'Optional animation file';
       document.getElementById('stIconPreview').style.display = 'none';
+      const ap = document.getElementById('stAnimPreview');
+      if (ap) ap.style.display = 'none';
+      onStoreFrameScaleChanged(128);
       document.getElementById('btnSaveStoreItem').textContent = '🚀 Upload & Publish Store Item';
       document.getElementById('btnCancelStoreEdit').style.display = 'none';
       onStoreCategoryChanged();
@@ -1589,8 +1695,10 @@
       }
       document.getElementById('stItemIconUrl').value = item.iconUrl || '';
       document.getElementById('stItemAnimUrl').value = item.animationUrl || '';
+      onStoreFrameScaleChanged(item.frameScalePercent || 128);
       selectedStoreIconDataUrl = '';
       previewStoreIconUrl(item.iconUrl || '');
+      previewStoreAnimUrl(item.animationUrl || '');
       document.getElementById('btnSaveStoreItem').textContent = '💾 Save Updated Store Item';
       document.getElementById('btnCancelStoreEdit').style.display = 'inline-block';
       onStoreCategoryChanged();
@@ -1620,8 +1728,24 @@
         }
         if (animFile) {
           progWrap.style.display = 'block';
-          const animKind = animFile.type.startsWith('video/') ? 'video' : 'icon';
-          animationUrl = await uploadCatalogMediaSmart(animFile, '', animKind, 'store', (m) => { progTxt.textContent = m; });
+          const isVid = String(animFile.type || '').startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(animFile.name || '');
+          const animKind = isVid ? 'video' : 'icon';
+          let animDataFallback = '';
+          if (!isVid && animFile.size <= 600000) {
+            animDataFallback = await new Promise((res, rej) => { const r = new FileReader(); r.onload = (e) => res(e.target.result); r.onerror = () => rej(new Error('Anim read failed')); r.readAsDataURL(animFile); });
+          }
+          animationUrl = await uploadCatalogMediaSmart(animFile, animDataFallback, animKind, 'store', (m) => { progTxt.textContent = m; });
+        }
+
+        // If user uploaded GIF/WebP in Box 2 without Box 1 artwork, mirror it into iconUrl so Store grid cards show it!
+        const animIsImage = Boolean(animationUrl) && !/\.(mp4|webm|mov|mkv)(\?|$)/i.test(animationUrl) && !animationUrl.startsWith('data:video');
+        if (!iconUrl && animIsImage) {
+          iconUrl = animationUrl;
+        }
+        // If user uploaded animated GIF/WebP directly in Box 1, mirror it into animationUrl if blank
+        const iconIsAnim = Boolean(iconUrl) && (/\.(gif|webp)(\?|$)/i.test(iconUrl) || iconUrl.startsWith('data:image/gif') || iconUrl.startsWith('data:image/webp'));
+        if (!animationUrl && iconIsAnim && (cat === 'VEHICLE' || cat === 'FRAME')) {
+          animationUrl = iconUrl;
         }
 
         const body = {
@@ -1633,9 +1757,10 @@
           minLevelRequired: Number(document.getElementById('stMinLevel').value || 0),
           basePrice7Days: Number(document.getElementById('stItemPrice').value || 10000),
           rarityStars: Number(document.getElementById('stItemRarity').value || 2),
+          frameScalePercent: Number(document.getElementById('stFrameScale')?.value || 128),
           iconUrl,
           animationUrl,
-          hasAnimationPlay: Boolean(animationUrl) || cat === 'VEHICLE' || cat === 'MIC_WAVE',
+          hasAnimationPlay: Boolean(animationUrl) || iconIsAnim || cat === 'VEHICLE' || cat === 'MIC_WAVE',
           specialIdNumber: document.getElementById('stSpecialIdNum').value.trim(),
           sampleBubbleText: document.getElementById('stBubbleText').value.trim(),
           micWaveColorHex: document.getElementById('stMicColorHex').value.trim(),
