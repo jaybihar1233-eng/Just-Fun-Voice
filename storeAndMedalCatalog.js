@@ -1,17 +1,23 @@
 'use strict';
 
+const crypto = require('crypto');
+const express = require('express');
+
 /**
- * Modular Store & Medal Catalog + Upload + Logic Engine
+ * Modular Store & Medal Catalog + Upload + A-to-Z Logic Engine
  * Kept isolated in /backend/catalog_manager/ so server.js stays clean and lightweight.
  *
  * Responsibilities:
  * 1. Zero-default Store & Medal management (Admin Panel is single source of truth).
  * 2. Full Admin CRUD for Store Items across VEHICLE (Entry Effect), THEME (Room Theme),
  *    FRAME, BUBBLE, MIC_WAVE, SPECIAL_ID (including unlockMode & minLevelRequired).
- * 3. Direct Media Upload endpoint supporting Cloudinary or Data-URI image fallback.
- * 4. Full Admin CRUD + Dynamic Unlock Logic Engine for Medals across:
- *    ALL_GIFTS_COINS, SPECIFIC_GIFT, RECHARGE_COINS, WEALTH_LEVEL, GAME_WINS,
- *    INVITES_COUNT, MANUAL_ADMIN (with 1★..4★ thresholds & validityDays).
+ * 3. Direct Cloudinary Storage linking for Store & Medals (scoped folders + raw fallback).
+ * 4. Complete A-to-Z Medal Logic Engine supporting:
+ *    - Gift Sent (All Coins / All Count / Specific Gift Coins or Count) & Gift Received
+ *    - Game Play Count, Game Win Coins, Game Win Count
+ *    - Daily Login Days & Daily Check-In Claims
+ *    - Event Participation (Any Event or Specific Event)
+ *    - Recharge Coins, Wealth Level, Charm Points, Invites Count, Room Joins, Admin Grant
  */
 
 const VALID_STORE_CATEGORIES = new Set([
@@ -27,13 +33,26 @@ const VALID_UNLOCK_MODES = new Set(['PURCHASE', 'MIN_LEVEL', 'ADMIN_ONLY']);
 
 const VALID_MEDAL_LINK_TYPES = new Set([
   'ALL_GIFTS_COINS',
+  'ALL_GIFTS_COUNT',
   'SPECIFIC_GIFT',
+  'GIFTS_RECEIVED_COINS',
+  'GAME_PLAYS_COUNT',
+  'GAME_WINS',
+  'GAME_WINS_COUNT',
+  'LOGIN_DAYS',
+  'DAILY_CHECKIN_COUNT',
+  'EVENT_PARTICIPATION',
   'RECHARGE_COINS',
   'WEALTH_LEVEL',
-  'GAME_WINS',
+  'CHARM_POINTS',
   'INVITES_COUNT',
+  'ROOM_JOIN_COUNT',
   'MANUAL_ADMIN',
 ]);
+
+function getTodayDateKeyIst() {
+  return new Date(Date.now() + 19800000).toISOString().slice(0, 10);
+}
 
 function normalizeThresholds(rawThresholds, fallbackTarget = 1) {
   const base = Math.max(1, Math.floor(Number(fallbackTarget || 1)));
@@ -83,25 +102,154 @@ function parseHexColor(rawHex) {
   return null;
 }
 
-function buildDefaultConditionText(linkType, thresholds, linkedGiftName) {
+function buildDefaultConditionText(linkType, thresholds, { linkedGiftName = '', linkedEventTitle = '', metricMode = 'COINS' } = {}) {
   const [t1, t2, t3, t4] = thresholds;
   const fmt = (n) => Number(n || 0).toLocaleString('en-US');
-  const suffix =
-    linkType === 'WEALTH_LEVEL'
-      ? 'Lv.'
-      : linkType === 'INVITES_COUNT'
-        ? 'Invites'
-        : linkType === 'MANUAL_ADMIN'
-          ? 'Admin Grant'
-          : 'Coins';
-  if (linkType === 'MANUAL_ADMIN') return 'Exclusive Official Admin Grant';
-  if (linkType === 'WEALTH_LEVEL') {
-    return `1★: Lv.${t1} | 2★: Lv.${t2} | 3★: Lv.${t3} | 4★: Lv.${t4}`;
+
+  switch (linkType) {
+    case 'MANUAL_ADMIN':
+      return 'Exclusive Official Admin Grant';
+    case 'WEALTH_LEVEL':
+      return `Reach Wealth Lv.${t1} / Lv.${t2} / Lv.${t3} / Lv.${t4}`;
+    case 'SPECIFIC_GIFT': {
+      const unit = metricMode === 'COUNT' ? 'Gifts' : 'Coins';
+      const gName = linkedGiftName || 'Specific Gift';
+      return `Send ${gName}: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)} ${unit}`;
+    }
+    case 'ALL_GIFTS_COUNT':
+      return `Send Gifts: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)} Gifts`;
+    case 'GIFTS_RECEIVED_COINS':
+      return `Receive Gifts: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)} Coins`;
+    case 'GAME_PLAYS_COUNT':
+      return `Play Games: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)} Rounds`;
+    case 'GAME_WINS_COUNT':
+      return `Win Games: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)} Wins`;
+    case 'GAME_WINS':
+      return `Win Game Coins: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)} Coins`;
+    case 'LOGIN_DAYS':
+      return `Login Days: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)} Days`;
+    case 'DAILY_CHECKIN_COUNT':
+      return `Daily Check-In: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)} Days`;
+    case 'EVENT_PARTICIPATION':
+      return linkedEventTitle
+        ? `Join Event "${linkedEventTitle}": ${fmt(t1)}★..${fmt(t4)}★`
+        : `Join Live Events: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)}`;
+    case 'ROOM_JOIN_COUNT':
+      return `Join Voice Rooms: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)}`;
+    case 'CHARM_POINTS':
+      return `Earn Charm: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)}`;
+    case 'INVITES_COUNT':
+      return `Invite Friends: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)}`;
+    default:
+      return `1★: ${fmt(t1)} | 2★: ${fmt(t2)} | 3★: ${fmt(t3)} | 4★: ${fmt(t4)} Coins`;
   }
-  if (linkType === 'SPECIFIC_GIFT' && linkedGiftName) {
-    return `${linkedGiftName}: 1★ ${fmt(t1)} | 2★ ${fmt(t2)} | 3★ ${fmt(t3)} | 4★ ${fmt(t4)}`;
+}
+
+function getCatalogCloudinaryConfig() {
+  const cleanVal = (v) =>
+    String(v || '')
+      .trim()
+      .replace(/^['"]+|['"]+$/g, '')
+      .trim();
+
+  let cloudName = cleanVal(process.env.CLOUDINARY_CLOUD_NAME || process.env.CLOUD_NAME);
+  let apiKey = cleanVal(process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_KEY || process.env.API_KEY);
+  let apiSecret = cleanVal(
+    process.env.CLOUDINARY_API_SECRET || process.env.CLOUDINARY_SECRET || process.env.API_SECRET
+  );
+
+  let rawUrl = cleanVal(process.env.CLOUDINARY_URL);
+  if (rawUrl.toUpperCase().startsWith('CLOUDINARY_URL=')) {
+    rawUrl = cleanVal(rawUrl.slice('CLOUDINARY_URL='.length));
   }
-  return `1★: ${fmt(t1)} | 2★: ${fmt(t2)} | 3★: ${fmt(t3)} | 4★: ${fmt(t4)} ${suffix}`;
+  if (!rawUrl && cloudName.startsWith('cloudinary://')) {
+    rawUrl = cloudName;
+    cloudName = '';
+  }
+  if (rawUrl.startsWith('cloudinary://')) {
+    try {
+      const parsed = new URL(rawUrl);
+      if (!cloudName && parsed.hostname) cloudName = decodeURIComponent(parsed.hostname);
+      if (!apiKey && parsed.username) apiKey = decodeURIComponent(parsed.username);
+      if (!apiSecret && parsed.password) apiSecret = decodeURIComponent(parsed.password);
+    } catch (_) {}
+  }
+  const rootRaw = cleanVal(process.env.CLOUDINARY_UPLOAD_FOLDER || 'justfun').replace(/^\/+|\/+$/g, '') || 'justfun';
+  const rootBase = rootRaw.replace(/\/gifts$/i, '') || 'justfun';
+  return {
+    configured: Boolean(cloudName && apiKey && apiSecret),
+    cloudName,
+    apiKey,
+    apiSecret,
+    rootBase,
+  };
+}
+
+function signScopedCloudinaryUpload({ kind = 'icon', scope = 'store' } = {}) {
+  const cfg = getCatalogCloudinaryConfig();
+  if (!cfg.configured) {
+    throw new Error(
+      'Cloudinary is not configured on the server. Set CLOUDINARY_URL (or CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET) in Render Environment Variables.'
+    );
+  }
+  const safeKind = String(kind).toLowerCase() === 'video' ? 'video' : 'icon';
+  const safeScope = String(scope).toLowerCase() === 'medals' ? 'medals' : 'store';
+  const resourceType = safeKind === 'video' ? 'video' : 'image';
+  const folder = `${cfg.rootBase}/${safeScope}/${safeKind === 'video' ? 'videos' : 'icons'}`;
+  const publicId = `${safeScope}_${crypto.randomUUID()}`;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const paramsToSign = `folder=${folder}&public_id=${publicId}&timestamp=${timestamp}`;
+  const signature = crypto
+    .createHash('sha1')
+    .update(paramsToSign + cfg.apiSecret)
+    .digest('hex');
+  return {
+    cloudName: cfg.cloudName,
+    apiKey: cfg.apiKey,
+    timestamp,
+    signature,
+    folder,
+    publicId,
+    resourceType,
+    uploadUrl: `https://api.cloudinary.com/v1_1/${encodeURIComponent(cfg.cloudName)}/${resourceType}/upload`,
+  };
+}
+
+async function uploadBufferToCloudinaryScoped({ buffer, kind = 'icon', scope = 'store', contentType }) {
+  const sign = signScopedCloudinaryUpload({ kind, scope });
+  const form = new FormData();
+  const isVideo = sign.resourceType === 'video';
+  let ext = isVideo ? 'mp4' : 'png';
+  if (contentType) {
+    if (contentType.includes('webp')) ext = 'webp';
+    else if (contentType.includes('gif')) ext = 'gif';
+    else if (contentType.includes('jpeg') || contentType.includes('jpg')) ext = 'jpg';
+    else if (contentType.includes('webm')) ext = 'webm';
+  }
+  const mime = contentType || (isVideo ? 'video/mp4' : 'image/png');
+  form.append('file', new Blob([buffer], { type: mime }), `${sign.publicId}.${ext}`);
+  form.append('api_key', sign.apiKey);
+  form.append('timestamp', String(sign.timestamp));
+  form.append('signature', sign.signature);
+  form.append('folder', sign.folder);
+  form.append('public_id', sign.publicId);
+
+  const response = await fetch(sign.uploadUrl, { method: 'POST', body: form });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.error) {
+    throw new Error(data?.error?.message || `Cloudinary upload failed (HTTP ${response.status})`);
+  }
+  const url = data.secure_url || data.url || '';
+  if (!url) {
+    throw new Error('Cloudinary did not return a media URL.');
+  }
+  return {
+    url,
+    downloadUrl: url,
+    publicId: data.public_id,
+    folder: sign.folder,
+    resourceType: sign.resourceType,
+  };
 }
 
 function initStoreAndMedalCatalog(ctx) {
@@ -122,12 +270,67 @@ function initStoreAndMedalCatalog(ctx) {
   } = ctx;
 
   // =========================================================================
-  // 1. DIRECT MEDIA UPLOAD (Cloudinary or Validated Image Data-URI Fallback)
+  // 1. CLOUDINARY STORAGE STATUS, SCOPED SIGNING & DIRECT MEDIA UPLOAD
   // =========================================================================
+  app.get('/api/admin/catalog/storage-status', requireAdminAuth, (_req, res) => {
+    const cfg = getCatalogCloudinaryConfig();
+    res.json({
+      ok: true,
+      cloudinaryConfigured: cfg.configured,
+      cloudName: cfg.configured ? cfg.cloudName : '',
+      storeFolder: `${cfg.rootBase}/store`,
+      medalsFolder: `${cfg.rootBase}/medals`,
+    });
+  });
+
+  app.post('/api/admin/catalog/cloudinary-sign', requireAdminAuth, (req, res) => {
+    try {
+      const kind = String(req.body?.kind || req.query?.kind || 'icon').toLowerCase() === 'video' ? 'video' : 'icon';
+      const scope = String(req.body?.scope || req.query?.scope || 'store').toLowerCase() === 'medals' ? 'medals' : 'store';
+      const signed = signScopedCloudinaryUpload({ kind, scope });
+      return res.json({ ok: true, ...signed });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || 'Cloudinary signing failed' });
+    }
+  });
+
+  app.put(
+    '/api/admin/catalog/upload-raw',
+    requireAdminAuth,
+    express.raw({ type: ['video/*', 'image/*', 'application/octet-stream'], limit: '65mb' }),
+    async (req, res) => {
+      try {
+        const kind = String(req.query?.kind || 'icon').toLowerCase() === 'video' ? 'video' : 'icon';
+        const scope = String(req.query?.scope || 'store').toLowerCase() === 'medals' ? 'medals' : 'store';
+        const buffer = req.body;
+        if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+          return res.status(400).json({ error: 'Empty media file upload body' });
+        }
+        const contentType = req.headers['content-type'] || (kind === 'video' ? 'video/mp4' : 'image/png');
+        const uploaded = await uploadBufferToCloudinaryScoped({
+          buffer,
+          kind,
+          scope,
+          contentType,
+        });
+        return res.json({
+          ok: true,
+          url: uploaded.url,
+          downloadUrl: uploaded.downloadUrl,
+          folder: uploaded.folder,
+          storage: 'cloudinary',
+        });
+      } catch (err) {
+        return res.status(500).json({ error: err.message || 'Cloudinary raw upload failed' });
+      }
+    }
+  );
+
   app.post('/api/admin/catalog/upload-media', requireAdminAuth, async (req, res) => {
     try {
       const kindRaw = String(req.body?.kind || 'icon').toLowerCase();
       const kind = kindRaw === 'video' ? 'video' : 'icon';
+      const scope = String(req.body?.scope || 'store').toLowerCase() === 'medals' ? 'medals' : 'store';
       const dataUrl = String(req.body?.dataUrl || '').trim();
       const contentType = String(req.body?.contentType || (kind === 'video' ? 'video/mp4' : 'image/png'));
       if (!dataUrl) {
@@ -138,37 +341,49 @@ function initStoreAndMedalCatalog(ctx) {
       }
 
       const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (match && typeof uploadMediaToCloudinaryLocal === 'function') {
-        try {
-          const buf = Buffer.from(match[2], 'base64');
-          const uploaded = await uploadMediaToCloudinaryLocal({
+      if (match) {
+        const buf = Buffer.from(match[2], 'base64');
+        const cfg = getCatalogCloudinaryConfig();
+        if (cfg.configured) {
+          const uploaded = await uploadBufferToCloudinaryScoped({
             buffer: buf,
             kind,
+            scope,
             contentType: match[1] || contentType,
           });
-          if (uploaded && uploaded.url) {
-            return res.json({ ok: true, url: uploaded.url, storage: 'cloudinary' });
-          }
-        } catch (cloudErr) {
-          // Fall back gracefully if image is small enough to inline when Cloudinary is not configured
-          if (kind === 'icon' && dataUrl.length <= 650000) {
-            return res.json({
-              ok: true,
-              url: dataUrl,
-              storage: 'inline_fallback',
-              warning: cloudErr.message,
+          return res.json({ ok: true, url: uploaded.url, storage: 'cloudinary', folder: uploaded.folder });
+        }
+        if (typeof uploadMediaToCloudinaryLocal === 'function') {
+          try {
+            const uploaded = await uploadMediaToCloudinaryLocal({
+              buffer: buf,
+              kind,
+              contentType: match[1] || contentType,
+            });
+            const resolvedUrl = uploaded?.url || uploaded?.downloadUrl || '';
+            if (resolvedUrl) {
+              return res.json({ ok: true, url: resolvedUrl, storage: 'cloudinary' });
+            }
+          } catch (cloudErr) {
+            if (kind === 'icon' && dataUrl.length <= 650000) {
+              return res.json({
+                ok: true,
+                url: dataUrl,
+                storage: 'inline_fallback',
+                warning: cloudErr.message,
+              });
+            }
+            return res.status(500).json({
+              error: `Cloudinary upload failed (${cloudErr.message}). Set CLOUDINARY_URL / keys on Render.`,
             });
           }
-          return res.status(500).json({
-            error: `Cloudinary upload failed (${cloudErr.message}). Configure Cloudinary env keys or use an external HTTPS URL.`,
-          });
         }
       }
 
       if (kind === 'icon' && dataUrl.length <= 650000) {
         return res.json({ ok: true, url: dataUrl, storage: 'inline_fallback' });
       }
-      return res.status(400).json({ error: 'Invalid upload payload or file too large without Cloudinary.' });
+      return res.status(400).json({ error: 'Cloudinary not configured or file too large for inline fallback.' });
     } catch (err) {
       return res.status(500).json({ error: err.message || 'Catalog upload failed' });
     }
@@ -269,7 +484,7 @@ function initStoreAndMedalCatalog(ctx) {
   });
 
   // =========================================================================
-  // 3. MEDAL CATALOG CRUD + GRANT/REVOKE + LOGIC ENGINE
+  // 3. MEDAL CATALOG CRUD + GRANT/REVOKE + A-TO-Z LOGIC ENGINE
   // =========================================================================
   app.post('/api/admin/medals', requireAdminAuth, (req, res) => {
     const id = String(req.body.id || `m_${Date.now()}`).trim();
@@ -289,6 +504,11 @@ function initStoreAndMedalCatalog(ctx) {
     const linkType = VALID_MEDAL_LINK_TYPES.has(rawLink) ? rawLink : 'ALL_GIFTS_COINS';
     const linkedGiftId = String(req.body.linkedGiftId ?? prev.linkedGiftId ?? '').trim();
     const linkedGiftName = String(req.body.linkedGiftName ?? prev.linkedGiftName ?? '').trim();
+    const linkedEventId = String(req.body.linkedEventId ?? prev.linkedEventId ?? '').trim();
+    const linkedEventTitle = String(req.body.linkedEventTitle ?? prev.linkedEventTitle ?? '').trim();
+    const metricMode = String(req.body.metricMode ?? prev.metricMode ?? 'COINS').trim().toUpperCase() === 'COUNT'
+      ? 'COUNT'
+      : 'COINS';
 
     const rawThresholds = Array.isArray(req.body.starThresholds)
       ? req.body.starThresholds
@@ -307,7 +527,7 @@ function initStoreAndMedalCatalog(ctx) {
     const iconUrl = req.body.iconUrl !== undefined ? String(req.body.iconUrl || '').trim() : (prev.iconUrl || '');
     const description = String(req.body.description || prev.description || 'Official Medal').trim();
     const unlockCondition = String(req.body.unlockCondition || '').trim()
-      || buildDefaultConditionText(linkType, starThresholds, linkedGiftName);
+      || buildDefaultConditionText(linkType, starThresholds, { linkedGiftName, linkedEventTitle, metricMode });
     const active = req.body.active !== false;
 
     const medal = {
@@ -319,8 +539,11 @@ function initStoreAndMedalCatalog(ctx) {
       unlockCondition,
       iconUrl,
       linkType,
+      metricMode,
       linkedGiftId,
       linkedGiftName,
+      linkedEventId,
+      linkedEventTitle,
       starThresholds,
       targetProgress: starThresholds[0],
       validityDays,
@@ -384,7 +607,7 @@ function initStoreAndMedalCatalog(ctx) {
   });
 
   // =========================================================================
-  // 4. MEDAL PROGRESS EVALUATION HOOKS (Recharge / Level / Game Wins / Invites)
+  // 4. A-TO-Z MEDAL EVALUATION ENGINE
   // =========================================================================
   function syncUserMedalsLive(uid, userProf) {
     sendToUser(uid, {
@@ -467,6 +690,148 @@ function initStoreAndMedalCatalog(ctx) {
     }
   }
 
+  function onUserLogin(uid) {
+    const cleanUid = String(uid || '').trim();
+    if (!cleanUid) return;
+    const prof = users.get(cleanUid);
+    if (!prof) return;
+    const todayKey = getTodayDateKeyIst();
+    const keys = Array.isArray(prof.loginDateKeys) ? [...prof.loginDateKeys] : [];
+    if (!keys.includes(todayKey)) {
+      keys.push(todayKey);
+      prof.loginDateKeys = keys.slice(-365);
+      users.set(cleanUid, prof);
+      firestoreStore.markUserDirty(cleanUid);
+      evaluateMedalsForUser(
+        cleanUid,
+        (m) => String(m.linkType || '').toUpperCase() === 'LOGIN_DAYS',
+        prof.loginDateKeys.length,
+        { isAdditive: false }
+      );
+    } else {
+      // Ensure newly added LOGIN_DAYS medals (e.g. 1-day First Login) also evaluate against existing login days
+      evaluateMedalsForUser(
+        cleanUid,
+        (m) => String(m.linkType || '').toUpperCase() === 'LOGIN_DAYS',
+        Math.max(1, keys.length),
+        { isAdditive: false }
+      );
+    }
+  }
+
+  function onDailyCheckIn(uid) {
+    evaluateMedalsForUser(
+      uid,
+      (m) => String(m.linkType || '').toUpperCase() === 'DAILY_CHECKIN_COUNT',
+      1,
+      { isAdditive: true }
+    );
+  }
+
+  function onGamePlayed(uid, roundNumber) {
+    const cleanUid = String(uid || '').trim();
+    if (!cleanUid) return;
+    const prof = users.get(cleanUid);
+    if (!prof) return;
+    const r = Math.floor(Number(roundNumber || 0));
+    if (r > 0 && Number(prof.lastGreedyPlayedRound || 0) === r) {
+      return; // Already counted this game round for this user
+    }
+    if (r > 0) {
+      prof.lastGreedyPlayedRound = r;
+      users.set(cleanUid, prof);
+      firestoreStore.markUserDirty(cleanUid);
+    }
+    evaluateMedalsForUser(
+      cleanUid,
+      (m) => String(m.linkType || '').toUpperCase() === 'GAME_PLAYS_COUNT',
+      1,
+      { isAdditive: true }
+    );
+  }
+
+  function onGameRoundWon(uid) {
+    evaluateMedalsForUser(
+      uid,
+      (m) => String(m.linkType || '').toUpperCase() === 'GAME_WINS_COUNT',
+      1,
+      { isAdditive: true }
+    );
+  }
+
+  function onGameCoinsWon(uid, coinsWon) {
+    if (coinsWon <= 0) return;
+    evaluateMedalsForUser(
+      uid,
+      (m) => String(m.linkType || '').toUpperCase() === 'GAME_WINS',
+      coinsWon,
+      { isAdditive: true }
+    );
+  }
+
+  function onEventParticipated(uid, eventId = '', eventTitle = '') {
+    const cleanUid = String(uid || '').trim();
+    if (!cleanUid) return;
+    const prof = users.get(cleanUid);
+    if (!prof) return;
+    const evId = String(eventId || '').trim();
+    const evTitle = String(eventTitle || '').trim();
+    const todayKey = getTodayDateKeyIst();
+    const dedupKey = `${evId || evTitle || 'any'}_${todayKey}`;
+    const seen = Array.isArray(prof.eventParticipatedKeys) ? [...prof.eventParticipatedKeys] : [];
+    if (seen.includes(dedupKey)) return;
+    seen.push(dedupKey);
+    prof.eventParticipatedKeys = seen.slice(-200);
+    users.set(cleanUid, prof);
+    firestoreStore.markUserDirty(cleanUid);
+
+    evaluateMedalsForUser(
+      cleanUid,
+      (m) => {
+        if (String(m.linkType || '').toUpperCase() !== 'EVENT_PARTICIPATION') return false;
+        const mEvId = String(m.linkedEventId || '').trim().toLowerCase();
+        const mEvTitle = String(m.linkedEventTitle || '').trim().toLowerCase();
+        if (!mEvId && !mEvTitle) return true; // Any event
+        if (mEvId && evId && mEvId === evId.toLowerCase()) return true;
+        if (mEvTitle && evTitle && evTitle.toLowerCase().includes(mEvTitle)) return true;
+        return false;
+      },
+      1,
+      { isAdditive: true }
+    );
+  }
+
+  function onRoomJoined(uid, roomId) {
+    const cleanUid = String(uid || '').trim();
+    if (!cleanUid || !roomId) return;
+    const prof = users.get(cleanUid);
+    if (!prof) return;
+    const key = `${String(roomId).trim()}_${getTodayDateKeyIst()}`;
+    const seen = Array.isArray(prof.roomJoinKeys) ? [...prof.roomJoinKeys] : [];
+    if (seen.includes(key)) return;
+    seen.push(key);
+    prof.roomJoinKeys = seen.slice(-200);
+    users.set(cleanUid, prof);
+    firestoreStore.markUserDirty(cleanUid);
+
+    evaluateMedalsForUser(
+      cleanUid,
+      (m) => String(m.linkType || '').toUpperCase() === 'ROOM_JOIN_COUNT',
+      1,
+      { isAdditive: true }
+    );
+  }
+
+  function onCharmUpdated(uid, totalCharmPoints) {
+    if (totalCharmPoints <= 0) return;
+    evaluateMedalsForUser(
+      uid,
+      (m) => String(m.linkType || '').toUpperCase() === 'CHARM_POINTS',
+      totalCharmPoints,
+      { isAdditive: false }
+    );
+  }
+
   function onRechargeCoins(uid, coinsAdded) {
     if (coinsAdded <= 0) return;
     evaluateMedalsForUser(
@@ -484,16 +849,6 @@ function initStoreAndMedalCatalog(ctx) {
       (m) => String(m.linkType || '').toUpperCase() === 'WEALTH_LEVEL',
       level,
       { isAdditive: false }
-    );
-  }
-
-  function onGameCoinsWon(uid, coinsWon) {
-    if (coinsWon <= 0) return;
-    evaluateMedalsForUser(
-      uid,
-      (m) => String(m.linkType || '').toUpperCase() === 'GAME_WINS',
-      coinsWon,
-      { isAdditive: true }
     );
   }
 
@@ -562,9 +917,16 @@ function initStoreAndMedalCatalog(ctx) {
   }
 
   return {
+    onUserLogin,
+    onDailyCheckIn,
+    onGamePlayed,
+    onGameRoundWon,
+    onGameCoinsWon,
+    onEventParticipated,
+    onRoomJoined,
+    onCharmUpdated,
     onRechargeCoins,
     onLevelUpdated,
-    onGameCoinsWon,
     onFriendInvited,
     validateStorePurchase,
     purgeLegacyDefaults,

@@ -1,0 +1,2245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JustFun — Master Admin Control Panel</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --card: #151c28;
+      --card-2: #1c2536;
+      --border: #28344b;
+      --accent: #19cc9d;
+      --accent-2: #4e6fff;
+      --danger: #ff4d4f;
+      --warn: #ffb74d;
+      --text: #f3f6fa;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 800; color: var(--accent); }
+    .auth-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    input, select, textarea {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    button {
+      background: var(--accent);
+      color: #062119;
+      border: none;
+      padding: 9px 15px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.9; }
+    button.secondary { background: var(--card-2); color: var(--text); border: 1px solid var(--border); }
+    button.danger { background: var(--danger); color: #fff; }
+    button.warn { background: var(--warn); color: #1a1200; }
+    .layout { display: flex; flex: 1; min-height: 0; }
+    nav {
+      width: 230px;
+      background: var(--card);
+      border-right: 1px solid var(--border);
+      padding: 14px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .nav-btn {
+      text-align: left;
+      background: transparent;
+      color: var(--muted);
+      padding: 11px 14px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+    .nav-btn.active { background: rgba(25, 204, 157, 0.15); color: var(--accent); border: 1px solid rgba(25, 204, 157, 0.35); }
+    main { flex: 1; padding: 22px; overflow-y: auto; max-width: 1400px; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .stat-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .stat-val { font-size: 22px; font-weight: 800; color: var(--accent); }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+    .card h3 { font-size: 16px; margin-bottom: 12px; color: var(--text); display: flex; align-items: center; justify-content: space-between; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    th, td { border-bottom: 1px solid var(--border); padding: 10px 8px; text-align: left; vertical-align: middle; }
+    th { color: var(--muted); font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 99px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .badge.ok { background: rgba(25, 204, 157, 0.16); color: var(--accent); }
+    .badge.ban { background: rgba(255, 77, 79, 0.2); color: var(--danger); }
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #111827;
+      border: 1px solid var(--accent);
+      color: var(--text);
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 13.5px;
+      font-weight: 600;
+      display: none;
+      z-index: 100;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.45);
+    }
+    @media (max-width: 820px) {
+      .layout { flex-direction: column; }
+      nav { width: 100%; display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; border-right: none; border-bottom: 1px solid var(--border); }
+      .nav-btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; padding: 10px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">⚡ JustFun Master Admin Panel (Real-Time API)</div>
+    <div class="auth-bar">
+      <input type="text" id="adminServerUrl" placeholder="Backend Server URL" value="https://just-fun-voice.onrender.com" style="min-width:240px;" />
+      <input type="password" id="adminKey" placeholder="Admin Secret Key" value="justfun-admin-2026" />
+      <button onclick="loadAll()">🔄 Sync Live State</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav>
+      <button class="nav-btn active" onclick="switchTab('events', this)">🖼️ Popular Banners & Broadcast</button>
+      <button class="nav-btn" onclick="switchTab('users', this)">👤 Users, ID & Device Ban</button>
+      <button class="nav-btn" onclick="switchTab('wallet', this)">💰 Wallet, Coins & Packs</button>
+      <button class="nav-btn" onclick="switchTab('gifts', this)">🎁 Gifts Manager (API)</button>
+      <button class="nav-btn" onclick="switchTab('store', this)">🏎️ Store: Frame / Car / Bubble</button>
+      <button class="nav-btn" onclick="switchTab('medals', this)">🏅 Medals & Levels</button>
+      <button class="nav-btn" onclick="switchTab('rules', this)">🛡️ Invite & Chat Rules</button>
+      <button class="nav-btn" onclick="switchTab('rooms', this)">🎤 Live Rooms & Reports</button>
+    </nav>
+
+    <main>
+      <div class="stats-grid" id="statsGrid">
+        <div class="stat-card"><div class="stat-label">Registered Users</div><div class="stat-val" id="stUsers">0</div></div>
+        <div class="stat-card"><div class="stat-label">Online Sockets</div><div class="stat-val" id="stOnline">0</div></div>
+        <div class="stat-card"><div class="stat-label">Live Voice Rooms</div><div class="stat-val" id="stRooms">0</div></div>
+        <div class="stat-card"><div class="stat-label">API Gifts Count</div><div class="stat-val" id="stGifts">0</div></div>
+        <div class="stat-card"><div class="stat-label">Banned IDs / Devices</div><div class="stat-val" id="stBanned">0 / 0</div></div>
+        <div class="stat-card"><div class="stat-label">Unfollowed DM Limit</div><div class="stat-val" id="stDmLimit">5</div></div>
+      </div>
+
+      <!-- 1. USERS, ID BAN & DEVICE BAN -->
+      <section class="panel" id="panel-users">
+        <div class="card">
+          <h3>🚫 Quick Ban / Unban User ID or Hardware Phone Device</h3>
+          <div class="form-grid">
+            <input id="banUserId" placeholder="8-Digit User ID (e.g. 12345678)" />
+            <input id="banReason" placeholder="Ban Reason (e.g. Fraud / Abuse)" value="Violated community rules" />
+            <button class="danger" onclick="banUser(true)">🚫 Ban User ID</button>
+            <button class="secondary" onclick="banUser(false)">✅ Unban User ID</button>
+          </div>
+          <div class="form-grid">
+            <input id="banDeviceTarget" placeholder="User ID or Device Key to Hardware-Ban" />
+            <button class="danger" onclick="banDevice(true)">📱 Ban Full Phone (Device)</button>
+            <button class="secondary" onclick="banDevice(false)">🔓 Unban Phone Device</button>
+            <button class="warn" onclick="resetDeviceSlots()">🔄 Reset Phone 3-ID Limit</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>👥 All Users (Real-Time)</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nickname</th>
+                  <th>Status</th>
+                  <th>Lv / Charm</th>
+                  <th>Coins / Diamonds</th>
+                  <th>Device Keys</th>
+                  <th>Quick Actions</th>
+                </tr>
+              </thead>
+              <tbody id="usersTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. WALLET & PACKS -->
+      <section class="panel" id="panel-wallet">
+        <div class="card">
+          <h3>💰 Add / Deduct User Coins & Diamonds (Live Sync)</h3>
+          <div class="form-grid">
+            <input id="walUserId" placeholder="8-Digit User ID" />
+            <input id="walCoinsDelta" type="number" placeholder="Coins (+Add or -Deduct)" value="100000" />
+            <input id="walDiamondsDelta" type="number" placeholder="Diamonds (+Add or -Deduct)" value="0" />
+            <input id="walNote" placeholder="Reason / Title" value="Admin Wallet Adjustment" />
+            <button onclick="adjustWallet()">⚡ Apply to Wallet</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>💎 Edit Wallet Recharge Packs (API Synced)</h3>
+          <div class="form-grid">
+            <input id="packId" placeholder="Pack ID (p1, p2, p3, p4)" value="p1" />
+            <input id="packCoins" type="number" placeholder="Coins Amount" value="800000" />
+            <input id="packInr" type="number" placeholder="Price (INR ₹)" value="100" />
+            <button onclick="saveRechargePack()">💾 Update Recharge Pack</button>
+          </div>
+          <div id="packsPreview" style="color:var(--muted); font-size:13px; margin-top:8px;"></div>
+        </div>
+      </section>
+
+      <!-- 3. DYNAMIC GIFTS MANAGER -->
+      <section class="panel" id="panel-gifts">
+        <div class="card" style="border-color: rgba(25,204,157,0.45); background: linear-gradient(145deg, #151c28, #13222d);">
+          <h3>🎬 Upload New MP4 Gift (Phone / PC Gallery → Cloudinary & Firestore)</h3>
+          <div class="form-grid">
+            <input id="mp4GiftName" placeholder="Gift Name (e.g. Royal Dragon)" />
+            <input id="mp4GiftPrice" type="number" min="1" placeholder="Price in Coins (Int, e.g. 5000)" />
+            <select id="mp4GiftCategory">
+              <option value="Gifts">Gifts</option>
+              <option value="Customized">Customized</option>
+              <option value="Lucky">Lucky</option>
+              <option value="Popular">Popular</option>
+              <option value="Luxury">Luxury</option>
+              <option value="CP">CP</option>
+            </select>
+            <input id="mp4GiftTag" placeholder="Badge Tag (MP4 / HOT / VIP)" value="MP4" />
+          </div>
+
+          <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+            <div style="flex:1; min-width:240px; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px;">
+              <input type="file" id="mp4VideoFile" accept="video/mp4" style="display:none;" onchange="onMp4VideoSelected(this)" />
+              <button type="button" id="btnSelectMp4Video" onclick="document.getElementById('mp4VideoFile').click()" style="width:100%; background:#1f3348; color:#4de8c0; border:1px solid #19cc9d;">
+                🎥 Select MP4 Video
+              </button>
+              <div id="mp4VideoFileName" style="margin-top:8px; font-size:12px; color:var(--muted); word-break:break-all;">
+                No MP4 video selected yet (MIME: video/mp4)
+              </div>
+            </div>
+
+            <div style="flex:1; min-width:240px; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px; display:flex; align-items:center; gap:12px;">
+              <img id="mp4ThumbPreview" src="" alt="" style="display:none; width:48px; height:48px; object-fit:cover; border-radius:10px; border:1px solid #ffc83d; flex-shrink:0;" />
+              <div style="flex:1; min-width:0;">
+                <input type="file" id="mp4ThumbFile" accept="image/*" style="display:none;" onchange="onMp4ThumbSelected(this)" />
+                <button type="button" id="btnSelectThumbIcon" onclick="document.getElementById('mp4ThumbFile').click()" style="width:100%; background:#2b2618; color:#ffc83d; border:1px solid #ffc83d;">
+                  🖼️ Select Thumbnail Icon
+                </button>
+                <div id="mp4ThumbFileName" style="margin-top:8px; font-size:12px; color:var(--muted); word-break:break-all;">
+                  No thumbnail icon selected yet (image/*)
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="mp4ProgressWrap" style="display:none; margin-bottom:14px; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; font-size:13px;">
+              <span id="mp4ProgressStage" style="color:#d6ddf7; font-weight:600;">Preparing upload...</span>
+              <span id="mp4ProgressPct" style="color:var(--accent); font-weight:800;">0%</span>
+            </div>
+            <div style="width:100%; height:10px; background:#1c2536; border-radius:8px; overflow:hidden;">
+              <div id="mp4ProgressFill" style="width:0%; height:100%; background:linear-gradient(90deg, #19cc9d, #4e6fff); transition:width 0.15s ease;"></div>
+            </div>
+          </div>
+
+          <button type="button" id="btnUploadSaveMp4Gift" onclick="uploadAndSaveMp4Gift()" style="width:100%; padding:13px 18px; font-size:15px;">
+            ☁️ Upload &amp; Save Gift
+          </button>
+        </div>
+
+        <div class="card">
+          <h3>🎁 Add or Update Gift via API (Loads Directly in App Without APK Update)</h3>
+          <div class="form-grid">
+            <input id="giftId" placeholder="Gift ID (e.g. g_dragon)" />
+            <input id="giftName" placeholder="Gift Name (e.g. Golden Dragon)" />
+            <input id="giftPrice" type="number" placeholder="Price in Coins (e.g. 5000)" />
+            <select id="giftCategory">
+              <option value="Popular">Popular</option>
+              <option value="Luxury">Luxury</option>
+              <option value="Privilege">Privilege</option>
+              <option value="CP">CP</option>
+            </select>
+            <input id="giftTag" placeholder="Tag (HOT / LUXURY / VIP)" value="HOT" />
+            <input id="giftIcon" placeholder="Emoji (🌹) OR Image URL (https://...)" value="🐉" />
+            <input id="giftAnimUrl" placeholder="Full-Screen GIF/WebP/PNG URL (Optional)" />
+            <input id="giftDuration" type="number" step="0.5" placeholder="Duration Sec (e.g. 4.0)" value="3.5" />
+            <button onclick="saveGift()">➕ Save / Update Gift</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>📦 Active API Gifts Catalog</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr><th>ID</th><th>Icon</th><th>Name</th><th>Category / Tag</th><th>Coins</th><th>Animation URL</th><th>Action</th></tr>
+              </thead>
+              <tbody id="giftsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. STORE: FRAMES, ENTRY EFFECTS (VEHICLES), ROOM THEMES, BUBBLES, MIC WAVE, SPECIAL ID -->
+      <section class="panel" id="panel-store">
+        <div class="card">
+          <h3>🎁 Grant VIP Store Item (Frame / Entry Effect / Theme / Bubble / Special ID) to User</h3>
+          <div class="form-grid">
+            <input id="grantUserId" placeholder="8-Digit User ID" />
+            <select id="grantItemId"></select>
+            <input id="grantDays" type="number" placeholder="Validity Days (e.g. 7, 15, 30)" value="30" />
+            <button onclick="grantStoreItem()">🚀 Grant &amp; Equip Live</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>
+            <span>🛒 Direct Upload &amp; Logic Manager — Store (Entry Effect, Theme, Frame, Bubble, Mic Wave, VIP ID)</span>
+            <button class="danger" style="padding:7px 12px; font-size:12px;" onclick="deleteAllStoreItems()">🗑️ Clear All Store Items</button>
+          </h3>
+          <p style="color:var(--muted); font-size:12.5px; margin-bottom:10px;">
+            Store starts at <b>0 items</b> until you upload here. Pick <b>Frame</b>, <b>Room Theme</b>, <b>Entry Effect (Vehicle)</b>, <b>Chat Bubble</b>, <b>Mic Wave</b>, or <b>VIP ID</b>, upload Image/MP4 directly to Cloudinary, set Price &amp; Unlock Logic, and publish live!
+          </p>
+          <div id="stCloudinaryStatus" style="font-size:12px; color:#ffc83d; background:rgba(255,200,61,0.08); border:1px solid rgba(255,200,61,0.28); padding:8px 12px; border-radius:8px; margin-bottom:12px;">
+            ☁️ Checking Cloudinary storage connection...
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+            <button type="button" class="secondary" onclick="quickSelectStoreCat('FRAME')">🖼️ + Add Avatar Frame</button>
+            <button type="button" class="secondary" onclick="quickSelectStoreCat('THEME')">🎨 + Add Room Theme</button>
+            <button type="button" class="secondary" onclick="quickSelectStoreCat('VEHICLE')">🏎️ + Add Entry Effect</button>
+            <button type="button" class="secondary" onclick="quickSelectStoreCat('BUBBLE')">💬 + Add Chat Bubble</button>
+            <button type="button" class="secondary" onclick="quickSelectStoreCat('MIC_WAVE')">〰️ + Add Mic Wave</button>
+            <button type="button" class="secondary" onclick="quickSelectStoreCat('SPECIAL_ID')">🆔 + Add VIP Special ID</button>
+          </div>
+          <div id="stCatHint" style="font-size:12px; color:#4de8c0; background:rgba(25,204,157,0.08); border:1px solid rgba(25,204,157,0.25); padding:8px 12px; border-radius:8px; margin-bottom:12px;">
+            🏎️ Entry Effect: Upload Thumbnail Icon + Optional MP4 Video / WebP animation that plays when user enters any Voice Room!
+          </div>
+          <input type="hidden" id="stEditMode" value="" />
+
+          <div class="form-grid">
+            <div>
+              <label class="stat-label">Item Category</label>
+              <select id="stItemCat" onchange="onStoreCategoryChanged()" style="width:100%">
+                <option value="VEHICLE">VEHICLE (Entry Effect / Ride)</option>
+                <option value="THEME">THEME (Room Background Theme)</option>
+                <option value="FRAME">FRAME (Avatar Frame)</option>
+                <option value="BUBBLE">BUBBLE (Chat Bubble)</option>
+                <option value="MIC_WAVE">MIC_WAVE (Mic Sound Wave)</option>
+                <option value="SPECIAL_ID">SPECIAL_ID (VIP Special ID)</option>
+              </select>
+            </div>
+            <div>
+              <label class="stat-label">Item Name (Required)</label>
+              <input id="stItemName" placeholder="e.g. Golden Lamborghini / Neon Palace" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Custom ID (Optional, auto if blank)</label>
+              <input id="stItemId" placeholder="e.g. v_gold_lambo" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Subtitle / Description</label>
+              <input id="stItemSubtitle" placeholder="e.g. Grand VIP Room Entry Effect" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Unlock / Access Logic</label>
+              <select id="stUnlockMode" onchange="onStoreUnlockModeChanged()" style="width:100%">
+                <option value="PURCHASE">Coins Purchase (Anyone can Buy)</option>
+                <option value="MIN_LEVEL">Min Wealth Level Required + Coins</option>
+                <option value="ADMIN_ONLY">Official Admin / VIP Grant Only</option>
+              </select>
+            </div>
+            <div id="stMinLevelWrap">
+              <label class="stat-label">Min Wealth Level Required (0 = All)</label>
+              <input id="stMinLevel" type="number" min="0" max="200" value="0" placeholder="0" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">7-Day Base Price (Coins)</label>
+              <input id="stItemPrice" type="number" value="12000" placeholder="12000" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Rarity Stars (1★ - 3★)</label>
+              <select id="stItemRarity" style="width:100%">
+                <option value="1">1★ Common</option>
+                <option value="2" selected>2★ Rare</option>
+                <option value="3">3★ Legendary VIP</option>
+              </select>
+            </div>
+            <div id="stSpecialIdWrap" style="display:none;">
+              <label class="stat-label">Special VIP ID Number</label>
+              <input id="stSpecialIdNum" placeholder="e.g. 888888" style="width:100%" />
+            </div>
+            <div id="stBubbleTextWrap" style="display:none;">
+              <label class="stat-label">Sample Chat Bubble Text</label>
+              <input id="stBubbleText" placeholder="Welcome to JustFun Party! 🎤" style="width:100%" />
+            </div>
+            <div id="stMicColorWrap" style="display:none;">
+              <label class="stat-label">Mic Wave Color Hex (e.g. #19CC9D)</label>
+              <input id="stMicColorHex" value="#19CC9D" placeholder="#19CC9D" style="width:100%" />
+            </div>
+          </div>
+
+          <!-- Direct Media Upload Boxes -->
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px; margin-bottom:14px;">
+            <div style="padding:12px; background:rgba(0,0,0,0.22); border:1px dashed var(--border); border-radius:10px;">
+              <label class="stat-label">1. Artwork / Theme / Thumbnail Image (Gallery/PC Upload)</label>
+              <input type="file" id="stIconFile" accept="image/*" style="display:none" onchange="onStoreIconFileSelected(this)" />
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                <button type="button" class="secondary" onclick="document.getElementById('stIconFile').click()">📁 Choose Image</button>
+                <span id="stIconFileName" style="font-size:12px; color:var(--muted);">No image selected</span>
+              </div>
+              <input id="stItemIconUrl" placeholder="Or paste Image URL (https://...)" oninput="previewStoreIconUrl(this.value)" style="width:100%; margin-top:8px;" />
+              <img id="stIconPreview" src="" style="display:none; width:84px; height:84px; object-fit:cover; border-radius:10px; border:1px solid var(--border); margin-top:8px;" />
+            </div>
+
+            <div style="padding:12px; background:rgba(0,0,0,0.22); border:1px dashed var(--border); border-radius:10px;">
+              <label class="stat-label">2. Optional Animation Effect (MP4 / WebP / GIF for Entry Effect / Theme)</label>
+              <input type="file" id="stAnimFile" accept="video/mp4,image/webp,image/gif" style="display:none" onchange="onStoreAnimFileSelected(this)" />
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                <button type="button" class="secondary" onclick="document.getElementById('stAnimFile').click()">🎬 Choose MP4 / WebP</button>
+                <span id="stAnimFileName" style="font-size:12px; color:var(--muted);">Optional animation file</span>
+              </div>
+              <input id="stItemAnimUrl" placeholder="Or paste MP4 / Animation URL (https://...)" style="width:100%; margin-top:8px;" />
+            </div>
+          </div>
+
+          <div id="stUploadProgressWrap" style="display:none; margin-bottom:12px; padding:10px 12px; background:rgba(25,204,157,0.1); border:1px solid var(--accent); border-radius:10px;">
+            <span id="stUploadProgressText" style="font-size:12.5px; color:var(--accent); font-weight:600;">Uploading...</span>
+          </div>
+
+          <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+            <button id="btnSaveStoreItem" onclick="saveStoreCatalogItem()">🚀 Upload &amp; Publish Store Item</button>
+            <button type="button" class="secondary" id="btnCancelStoreEdit" style="display:none;" onclick="resetStoreForm()">✖ Cancel Edit</button>
+          </div>
+
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr><th>Preview</th><th>ID &amp; Name</th><th>Category</th><th>Unlock Logic &amp; Price</th><th>Status</th><th>Action</th></tr>
+              </thead>
+              <tbody id="storeTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. MEDALS & LEVELS -->
+      <section class="panel" id="panel-medals">
+        <div class="card">
+          <h3>🏅 Set User Level / EXP or Grant / Revoke Medal for User ID</h3>
+          <div class="form-grid">
+            <input id="medUserId" placeholder="8-Digit User ID" />
+            <input id="medLevel" type="number" placeholder="New Level (e.g. 25, blank to skip)" />
+            <select id="medGrantDropdown" onchange="if(this.value) document.getElementById('medIdToGrant').value=this.value;">
+              <option value="">-- Pick Uploaded Medal --</option>
+            </select>
+            <input id="medIdToGrant" placeholder="Or type Medal ID" />
+            <div style="display:flex; gap:8px;">
+              <button onclick="updateUserMedalAndLevel()" style="flex:1;">⚡ Grant / Update</button>
+              <button class="danger" onclick="revokeUserMedal()">✖ Revoke Medal</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>
+            <span>🎖️ Direct Upload &amp; Logic Builder — Medals (1★ to 4★ Real-Time Sync)</span>
+            <button class="danger" style="padding:7px 12px; font-size:12px;" onclick="deleteAllMedals()">🗑️ Clear All Medals</button>
+          </h3>
+          <p style="color:var(--muted); font-size:12.5px; margin-bottom:10px;">
+            Medals start at <b>0</b> until you upload here. Upload Medal Image directly to <b>Cloudinary</b> &amp; set <b>A-to-Z Unlock Logic</b> (Game Khelne Pe, Game Jeetne Pe, Gift Bhejne Pe, Login Karne Pe, Daily Check-In Pe, Event Join Pe, Recharge, Level, Invites, Room Join, or Admin Grant Only)!
+          </p>
+          <div id="medalCloudinaryStatus" style="font-size:12px; color:#ffc83d; background:rgba(255,200,61,0.08); border:1px solid rgba(255,200,61,0.28); padding:8px 12px; border-radius:8px; margin-bottom:12px;">
+            ☁️ Checking Cloudinary storage connection...
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px;">
+            <button type="button" class="secondary" onclick="applyMedalPreset('GAME_PLAYS_COUNT')">🎮 Game Khelne Pe</button>
+            <button type="button" class="secondary" onclick="applyMedalPreset('GAME_WINS')">🏆 Game Jeetne Pe</button>
+            <button type="button" class="secondary" onclick="applyMedalPreset('ALL_GIFTS_COINS')">🎁 Gift Bhejne Pe</button>
+            <button type="button" class="secondary" onclick="applyMedalPreset('SPECIFIC_GIFT')">🌹 Khaas Gift Pe</button>
+            <button type="button" class="secondary" onclick="applyMedalPreset('LOGIN_DAYS')">🔑 Login Karne Pe</button>
+            <button type="button" class="secondary" onclick="applyMedalPreset('DAILY_CHECKIN_COUNT')">📅 Check-In Pe</button>
+            <button type="button" class="secondary" onclick="applyMedalPreset('EVENT_PARTICIPATION')">🎉 Event Pe</button>
+            <button type="button" class="secondary" onclick="applyMedalPreset('RECHARGE_COINS')">💎 Recharge Pe</button>
+            <button type="button" class="secondary" onclick="applyMedalPreset('MANUAL_ADMIN')">👑 Admin Grant Only</button>
+          </div>
+          <input type="hidden" id="medalEditMode" value="" />
+
+          <div class="form-grid">
+            <div>
+              <label class="stat-label">Medal Title (Required)</label>
+              <input id="newMedalName" placeholder="e.g. Royal King / Login Star / Greedy Pro" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Medal ID (Optional, auto if blank)</label>
+              <input id="newMedalId" placeholder="e.g. m_login_star" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Tab Category</label>
+              <select id="newMedalCat" style="width:100%">
+                <option value="ACHIEVEMENT">ACHIEVEMENT</option>
+                <option value="GIFT">GIFT</option>
+                <option value="ACTIVITY">ACTIVITY (Event / Login / Timed)</option>
+              </select>
+            </div>
+            <div>
+              <label class="stat-label">A-to-Z Unlock Logic Rule</label>
+              <select id="newMedalLinkType" onchange="onMedalLinkTypeChanged(true)" style="width:100%">
+                <option value="GAME_PLAYS_COUNT">🎮 Game Khelne Pe (Games Played Count)</option>
+                <option value="GAME_WINS">🏆 Game Jeetne Pe (Game Coins Won)</option>
+                <option value="GAME_WINS_COUNT">🎲 Game Jeetne Pe (Rounds Won Count)</option>
+                <option value="ALL_GIFTS_COINS">🎁 Gift Bhejne Pe (Total Gift Coins Sent)</option>
+                <option value="ALL_GIFTS_COUNT">🎀 Gift Bhejne Pe (Total Gifts Count)</option>
+                <option value="SPECIFIC_GIFT">🌹 Khaas Gift Bhejne Pe (Specific Gift)</option>
+                <option value="GIFTS_RECEIVED_COINS">💐 Gift Milne Pe (Gift Coins Received)</option>
+                <option value="LOGIN_DAYS">🔑 App Login Karne Pe (Login Days / 1 = First Login)</option>
+                <option value="DAILY_CHECKIN_COUNT">📅 Daily Check-In Karne Pe (Check-In Days)</option>
+                <option value="EVENT_PARTICIPATION">🎉 Event Join / Tap Karne Pe (Live Event)</option>
+                <option value="RECHARGE_COINS">💎 Coin Recharge Karne Pe (Total Recharged)</option>
+                <option value="WEALTH_LEVEL">👑 Wealth Level Reached (Lv.X)</option>
+                <option value="CHARM_POINTS">✨ Charm Points Earned</option>
+                <option value="INVITES_COUNT">🤝 Friends Invited Count</option>
+                <option value="ROOM_JOIN_COUNT">🎤 Voice Room Join Count</option>
+                <option value="MANUAL_ADMIN">🛡️ Official Admin Grant Only</option>
+              </select>
+            </div>
+            <div id="medalGiftPickerWrap" style="display:none;">
+              <label class="stat-label">Pick Uploaded Gift</label>
+              <select id="newMedalGiftSelect" onchange="onMedalGiftPicked()" style="width:100%">
+                <option value="">-- Select Gift or Type Below --</option>
+              </select>
+            </div>
+            <div id="medalGiftMetricWrap" style="display:none;">
+              <label class="stat-label">Count By (Gift Metric)</label>
+              <select id="newMedalMetricMode" style="width:100%">
+                <option value="COINS">Coins Value Spent</option>
+                <option value="COUNT">Gift Quantity Count (e.g. 1, 5, 10)</option>
+              </select>
+            </div>
+            <div id="medalGiftIdWrap" style="display:none;">
+              <label class="stat-label">Linked Gift ID</label>
+              <input id="newMedalGiftId" placeholder="e.g. g_rose" style="width:100%" />
+            </div>
+            <div id="medalGiftNameWrap" style="display:none;">
+              <label class="stat-label">Linked Gift Name</label>
+              <input id="newMedalGiftName" placeholder="e.g. Rose" style="width:100%" />
+            </div>
+            <div id="medalEventPickerWrap" style="display:none;">
+              <label class="stat-label">Pick Live Event (or Any Event)</label>
+              <select id="newMedalEventSelect" onchange="onMedalEventPicked()" style="width:100%">
+                <option value="">-- Any Live Event --</option>
+              </select>
+            </div>
+            <div id="medalEventIdWrap" style="display:none;">
+              <label class="stat-label">Linked Event ID (Blank = Any Event)</label>
+              <input id="newMedalEventId" placeholder="Optional Event ID" style="width:100%" />
+            </div>
+            <div id="medalEventTitleWrap" style="display:none;">
+              <label class="stat-label">Linked Event Title (Optional)</label>
+              <input id="newMedalEventTitle" placeholder="Optional Event Title match" style="width:100%" />
+            </div>
+            <div id="medalThresholdsWrap" style="display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; grid-column: 1 / -1;">
+              <div>
+                <label class="stat-label" id="lblStar1">1★ Target</label>
+                <input id="newMedalStar1" type="number" value="1" style="width:100%" />
+              </div>
+              <div>
+                <label class="stat-label" id="lblStar2">2★ Target</label>
+                <input id="newMedalStar2" type="number" value="5" style="width:100%" />
+              </div>
+              <div>
+                <label class="stat-label" id="lblStar3">3★ Target</label>
+                <input id="newMedalStar3" type="number" value="15" style="width:100%" />
+              </div>
+              <div>
+                <label class="stat-label" id="lblStar4">4★ Target</label>
+                <input id="newMedalStar4" type="number" value="30" style="width:100%" />
+              </div>
+            </div>
+            <div>
+              <label class="stat-label">Validity Days (0 = Permanent)</label>
+              <input id="newMedalValidityDays" type="number" min="0" value="0" placeholder="0 = Permanent" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Description</label>
+              <input id="newMedalDesc" placeholder="How to earn this medal" value="Complete the target in live rooms to unlock & upgrade 1★ to 4★." style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Custom Condition Text (Optional)</label>
+              <input id="newMedalCondition" placeholder="Auto-generated if blank" style="width:100%" />
+            </div>
+          </div>
+
+          <div style="padding:12px; background:rgba(0,0,0,0.22); border:1px dashed var(--border); border-radius:10px; margin-bottom:14px;">
+            <label class="stat-label">🏅 Upload Medal Badge Icon (PNG / WebP / GIF / JPG — uploads to Cloudinary)</label>
+            <input type="file" id="medalIconFile" accept="image/*" style="display:none" onchange="onMedalIconFileSelected(this)" />
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+              <button type="button" class="secondary" onclick="document.getElementById('medalIconFile').click()">📁 Choose Medal Image</button>
+              <span id="medalIconFileName" style="font-size:12px; color:var(--muted);">No image selected</span>
+              <img id="medalIconPreview" src="" style="display:none; width:56px; height:56px; object-fit:contain; border-radius:10px; border:1px solid var(--border); background:#0f162a;" />
+            </div>
+            <input id="newMedalIconUrl" placeholder="Or paste Medal Icon URL (https://...)" oninput="previewMedalIconUrl(this.value)" style="width:100%; margin-top:8px;" />
+          </div>
+
+          <div id="medalUploadProgressWrap" style="display:none; margin-bottom:12px; padding:10px 12px; background:rgba(25,204,157,0.1); border:1px solid var(--accent); border-radius:10px;">
+            <span id="medalUploadProgressText" style="font-size:12.5px; color:var(--accent); font-weight:600;">Uploading Medal icon to Cloudinary...</span>
+          </div>
+
+          <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+            <button id="btnSaveMedal" onclick="saveCustomMedal()">🚀 Upload &amp; Publish Medal Live</button>
+            <button type="button" class="secondary" id="btnCancelMedalEdit" style="display:none;" onclick="resetMedalForm()">✖ Cancel Edit</button>
+          </div>
+
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr><th>Icon</th><th>ID &amp; Name</th><th>Category</th><th>Logic Rule &amp; 1★-4★ Targets</th><th>Validity</th><th>Status</th><th>Action</th></tr>
+              </thead>
+              <tbody id="medalsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. POPULAR BANNERS, WEBVIEW & BROADCAST -->
+      <section class="panel active" id="panel-events">
+        <div class="card">
+          <h3>
+            <span>🖼️ Popular Tab Live Sliding Banners (Auto-Slide Carousel + In-App WebView)</span>
+            <button class="danger" style="padding:7px 12px; font-size:12px;" onclick="deleteAllEventBanners()">🗑️ Delete All Banners</button>
+          </h3>
+          <p style="color:var(--muted); font-size:12.5px; margin-bottom:14px;">
+            Upload banner photos directly from your phone/PC gallery or paste an image URL. Banners auto-slide in the <b>Popular</b> tab in real time. Tapping a banner opens the configured <b>WebView Link (URL)</b> or built-in <b>Event WebView Page</b> inside the app.
+          </p>
+
+          <input type="hidden" id="evEditId" value="" />
+
+          <div class="form-grid">
+            <div>
+              <label class="stat-label">Banner Title (Shown in Header)</label>
+              <input id="evTitle" placeholder="e.g. Invite Friends & Win Coins / SVIP Offer" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">🎯 Banner Click Target (Where User Navigates on Tap)</label>
+              <select id="evActionType" style="width:100%">
+                <option value="WEBVIEW">🌐 In-App WebView (Website Link / Event Page)</option>
+                <option value="WALLET">💰 Wallet / Coin Recharge Screen</option>
+                <option value="INVITE">🎁 Invite Friends Screen (Refer & Earn)</option>
+                <option value="STORE">🏎️ Store (Vehicle / Frame / Chat Bubble / VIP ID)</option>
+                <option value="MY_ITEMS">🎒 My Items (Backpack)</option>
+                <option value="LEVEL">👑 My Level & Privileges Screen</option>
+                <option value="MEDAL">🏅 Medals Wall Screen</option>
+                <option value="CUSTOMER_SERVICE">💬 Official Customer Service Chat</option>
+                <option value="ROOM">🎤 Join Specific Voice Room (By Room ID)</option>
+                <option value="FEEDBACK">📝 Feedback & Support Screen</option>
+              </select>
+            </div>
+            <div>
+              <label class="stat-label">In-App WebView URL (If Target = WebView)</label>
+              <input id="evWebUrl" placeholder="https://example.com/event (Leave blank for Built-in Event Page)" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Target Voice Room ID (If Target = Room or Event CTA)</label>
+              <input id="evTargetRoomId" placeholder="Optional 8-digit Room ID" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Slide Order (1 = First, 2 = Second...)</label>
+              <input id="evSortOrder" type="number" min="1" value="1" placeholder="1" style="width:100%" />
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <div style="grid-column: 1 / -1;">
+              <label class="stat-label">Event Details / Rules (Displayed in In-App WebView if no external URL is given)</label>
+              <textarea id="evSubtitle" rows="2" placeholder="Enter event rules, rewards, schedule, or HTML content..." style="width:100%"></textarea>
+            </div>
+          </div>
+
+          <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; background:var(--card-2); border:1px solid var(--border); padding:12px; border-radius:10px; margin-bottom:14px;">
+            <input type="file" id="evBannerFile" accept="image/*" style="display:none" onchange="onBannerFileSelected(this)" />
+            <button type="button" class="secondary" onclick="document.getElementById('evBannerFile').click()">📁 Upload Banner Photo from Gallery</button>
+            <span id="evBannerFileName" style="font-size:12.5px; color:var(--muted);">No gallery image selected</span>
+            <img id="evBannerPreview" src="" alt="Banner Preview" style="display:none; height:48px; width:128px; object-fit:cover; border-radius:8px; border:1px solid var(--accent);" />
+            <div style="flex:1; min-width:220px;">
+              <input id="evBannerUrl" placeholder="Or paste direct Banner Image URL (https://...)" style="width:100%" oninput="onBannerUrlTyped(this.value)" />
+            </div>
+          </div>
+
+          <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px;">
+            <button id="btnPublishBanner" onclick="addEventBanner()">🚀 Upload & Publish Live Banner</button>
+            <button type="button" class="secondary" id="btnCancelBannerEdit" style="display:none;" onclick="resetBannerForm()">✖ Cancel Edit</button>
+          </div>
+
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Banner Preview</th>
+                  <th>Title & Details</th>
+                  <th>WebView Click Action</th>
+                  <th>Status</th>
+                  <th>Actions (Edit / Delete)</th>
+                </tr>
+              </thead>
+              <tbody id="eventsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>📢 Send Real-Time Notification / Customer Service Message</h3>
+          <div class="form-grid">
+            <input id="bcTargetUserId" placeholder="Target User ID (Leave blank for ALL users)" />
+            <input id="bcTitle" placeholder="Notification Title" value="🎉 Official JustFun Reward Event!" />
+            <input id="bcContent" placeholder="Message Content" value="Join live voice rooms tonight at 9 PM for double Lucky Box rewards!" />
+            <select id="bcChannel">
+              <option value="NOTIFICATION">System Notification + Customer Service</option>
+              <option value="CUSTOMER_SERVICE">Customer Service Chat Only</option>
+            </select>
+            <button onclick="sendBroadcast()">📣 Send Live Broadcast</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7. RULES, INVITE & CHAT LIMITS -->
+      <section class="panel" id="panel-rules">
+        <div class="card">
+          <h3>🛡️ Global App Rules, Invite Rewards & Anti-Cheat Settings</h3>
+          <div class="form-grid">
+            <div>
+              <label class="stat-label">Max Messages Without Mutual Follow</label>
+              <input id="ruleDmLimit" type="number" value="5" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Max Accounts Per Phone (Device Limit)</label>
+              <input id="ruleMaxAccounts" type="number" value="3" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Invite Day-1 Reward (Coins)</label>
+              <input id="ruleInvDay1" type="number" value="50000" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Invite Day-3 Reward (Coins)</label>
+              <input id="ruleInvDay3" type="number" value="150000" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Invited Friend Welcome Bonus (Coins)</label>
+              <input id="ruleInvWelcome" type="number" value="250000" style="width:100%" />
+            </div>
+            <div>
+              <label class="stat-label">Daily Check-In Reward (Coins)</label>
+              <input id="ruleCheckInCoins" type="number" value="10" style="width:100%" />
+            </div>
+          </div>
+          <button onclick="saveGlobalRules()">💾 Save & Broadcast Rules Live</button>
+        </div>
+      </section>
+
+      <!-- 8. LIVE VOICE ROOMS & REPORTS -->
+      <section class="panel" id="panel-rooms">
+        <div class="card">
+          <h3>🎤 Active Voice Party Rooms</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>Room ID</th><th>Title</th><th>Host</th><th>Online</th><th>Official</th><th>Actions</th></tr></thead>
+              <tbody id="roomsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>🚩 User Reports & Feedback Tickets</h3>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead><tr><th>Type</th><th>From User</th><th>Target / Contact</th><th>Reason / Content</th><th>Time</th></tr></thead>
+              <tbody id="reportsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    (function initDefaultServerUrl() {
+      const urlInput = document.getElementById('adminServerUrl');
+      if (urlInput && window.location && window.location.origin && window.location.origin.includes('onrender.com')) {
+        urlInput.value = window.location.origin;
+      }
+    })();
+
+    function getServerBaseUrl() {
+      const el = document.getElementById('adminServerUrl');
+      const raw = el ? el.value.trim().replace(/\/+$/, '') : '';
+      return raw || 'https://just-fun-voice.onrender.com';
+    }
+
+    function getSecret() {
+      const el = document.getElementById('adminKey');
+      return el ? el.value.trim() : 'justfun-admin-2026';
+    }
+    var secret = 'justfun-admin-2026';
+
+    function packBannerUrlWithMeta(cleanBannerUrl, meta) {
+      const base = String(cleanBannerUrl || '').split('#jfmeta=')[0];
+      if (!base) return '';
+      try {
+        const json = JSON.stringify({
+          actionType: meta.actionType || 'WEBVIEW',
+          webUrl: meta.webUrl || '',
+          targetRoomId: meta.targetRoomId || '',
+          sortOrder: Number(meta.sortOrder || 1),
+          active: meta.active !== false
+        });
+        return base + '#jfmeta=' + encodeURIComponent(json);
+      } catch (_) {
+        return base;
+      }
+    }
+
+    function unpackBannerEvent(ev, idx) {
+      const copy = Object.assign({}, ev || {});
+      const rawUrl = String(copy.bannerUrl || '');
+      const parts = rawUrl.split('#jfmeta=');
+      copy.bannerUrl = parts[0] || '';
+      if (parts[1]) {
+        try {
+          const parsed = JSON.parse(decodeURIComponent(parts[1]));
+          if (!copy.actionType && parsed.actionType) copy.actionType = parsed.actionType;
+          if (!copy.webUrl && parsed.webUrl) copy.webUrl = parsed.webUrl;
+          if (!copy.targetRoomId && parsed.targetRoomId) copy.targetRoomId = parsed.targetRoomId;
+          if (typeof copy.sortOrder !== 'number' && typeof parsed.sortOrder === 'number') copy.sortOrder = parsed.sortOrder;
+          if (typeof parsed.active === 'boolean') copy.active = parsed.active;
+        } catch (_) {}
+      }
+      copy.actionType = String(copy.actionType || 'WEBVIEW').toUpperCase();
+      copy.sortOrder = typeof copy.sortOrder === 'number' ? copy.sortOrder : (idx + 1);
+      copy.active = copy.active !== false;
+      return copy;
+    }
+
+    function showToast(msg, isErr = false) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.style.borderColor = isErr ? '#ff4d4f' : '#19cc9d';
+      el.style.display = 'block';
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3200);
+    }
+
+    function switchTab(id, btn) {
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('panel-' + id).classList.add('active');
+      if (btn) btn.classList.add('active');
+    }
+
+    async function api(path, method = 'GET', body = null) {
+      const key = getSecret();
+      secret = key;
+      const base = getServerBaseUrl();
+      const fullUrl = path.startsWith('http') ? path : (base + path);
+      const opts = {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-key': key,
+          'x-admin-secret': key
+        }
+      };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(fullUrl, opts);
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    async function refreshCatalogStorageStatus() {
+      const stEl = document.getElementById('stCloudinaryStatus');
+      const medEl = document.getElementById('medalCloudinaryStatus');
+      try {
+        const s = await api('/api/admin/catalog/storage-status');
+        window._cloudinaryReady = Boolean(s && s.cloudinaryConfigured);
+        if (s && s.cloudinaryConfigured) {
+          const msg = `☁️ Cloudinary Live Linked (Cloud: <b>${s.cloudName}</b> • Store: <code>${s.storeFolder}</code> • Medals: <code>${s.medalsFolder}</code>)`;
+          [stEl, medEl].forEach((el) => {
+            if (!el) return;
+            el.style.color = '#4de8c0';
+            el.style.background = 'rgba(25,204,157,0.08)';
+            el.style.borderColor = 'rgba(25,204,157,0.3)';
+            el.innerHTML = msg;
+          });
+        } else {
+          const msg = `⚠️ Cloudinary Env Not Configured on Server — set <b>CLOUDINARY_URL</b> (or CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET) in Render Env Vars!`;
+          [stEl, medEl].forEach((el) => {
+            if (!el) return;
+            el.style.color = '#ffc83d';
+            el.style.background = 'rgba(255,200,61,0.08)';
+            el.style.borderColor = 'rgba(255,200,61,0.28)';
+            el.innerHTML = msg;
+          });
+        }
+      } catch (err) {
+        const msg = `⚠️ New Cloudinary catalog routes live nahi hain (${err.message}). Updated <b>backend/</b> ko Render par Deploy karein.`;
+        [stEl, medEl].forEach((el) => {
+          if (!el) return;
+          el.style.color = '#ff8787';
+          el.style.background = 'rgba(255,77,79,0.09)';
+          el.style.borderColor = 'rgba(255,77,79,0.3)';
+          el.innerHTML = msg;
+        });
+      }
+    }
+
+    async function loadAll() {
+      try {
+        refreshCatalogStorageStatus();
+        const d = await api('/api/admin/overview');
+        document.getElementById('stUsers').textContent = d.stats.totalUsers;
+        document.getElementById('stOnline').textContent = d.stats.onlineUsers;
+        document.getElementById('stRooms').textContent = d.stats.liveRoomsCount;
+        document.getElementById('stGifts').textContent = d.gifts.length;
+        document.getElementById('stBanned').textContent = `${d.stats.bannedUsersCount} / ${d.stats.bannedDevicesCount}`;
+        document.getElementById('stDmLimit').textContent = d.rules.maxUnfollowedDmMessages;
+
+        // Rules inputs
+        document.getElementById('ruleDmLimit').value = d.rules.maxUnfollowedDmMessages;
+        document.getElementById('ruleMaxAccounts').value = d.rules.maxAccountsPerDevice;
+        document.getElementById('ruleInvDay1').value = d.rules.inviteDay1Coins;
+        document.getElementById('ruleInvDay3').value = d.rules.inviteDay3Coins;
+        document.getElementById('ruleInvWelcome').value = d.rules.inviteFriendWelcomeCoins;
+        document.getElementById('ruleCheckInCoins').value = d.rules.dailyCheckInCoins;
+
+        // Users table
+        const uBody = document.getElementById('usersTableBody');
+        uBody.innerHTML = d.users.map(u => `
+          <tr>
+            <td><b>${u.userId}</b></td>
+            <td>${u.nickname || '-'}</td>
+            <td>
+              ${u.isBanned ? '<span class="badge ban">BANNED</span>' : (u.isOnline ? '<span class="badge ok">ONLINE</span>' : '<span class="badge">OFFLINE</span>')}
+            </td>
+            <td>Lv.${u.level || 0} / ✨${u.totalCharmPoints || 0}</td>
+            <td>🪙 ${(u.coins || 0).toLocaleString()} / 💎 ${(u.diamonds || 0).toLocaleString()}</td>
+            <td style="font-size:11px; color:var(--muted); max-width:180px; word-break:break-all;">${(u.deviceKeys || []).join(', ') || '-'}</td>
+            <td>
+              <button class="${u.isBanned ? 'secondary' : 'danger'}" style="padding:5px 9px; font-size:11px;" onclick="quickToggleBan('${u.userId}', ${!u.isBanned})">${u.isBanned ? 'Unban ID' : 'Ban ID'}</button>
+              <button class="secondary" style="padding:5px 9px; font-size:11px;" onclick="prefillWallet('${u.userId}')">+Coins</button>
+            </td>
+          </tr>
+        `).join('');
+
+        // Packs preview
+        document.getElementById('packsPreview').innerHTML = Object.entries(d.rechargePacks || {})
+          .map(([k, v]) => `<b>${k}</b>: ${Number(v.coins).toLocaleString()} Coins (₹${v.priceInr})`)
+          .join(' &nbsp;|&nbsp; ');
+
+        // Gifts table
+        const gBody = document.getElementById('giftsTableBody');
+        gBody.innerHTML = d.gifts.map(g => `
+          <tr>
+            <td><b>${g.id}</b></td>
+            <td style="font-size:20px;">${g.icon && g.icon.startsWith('http') ? `<img src="${g.icon}" style="width:28px;height:28px;border-radius:6px;object-fit:cover;"/>` : (g.icon || '🎁')}</td>
+            <td>${g.name}</td>
+            <td>${g.category} <span class="badge ok">${g.tag || 'HOT'}</span></td>
+            <td>🪙 ${Number(g.priceCoins).toLocaleString()}</td>
+            <td style="font-size:11px; color:var(--muted); max-width:200px; overflow:hidden; text-overflow:ellipsis;">${g.animationUrl || 'Built-in'}</td>
+            <td><button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteGift('${g.id}')">Delete</button></td>
+          </tr>
+        `).join('');
+
+        // Populate gift dropdown in Medal Builder
+        window._loadedGifts = d.gifts || [];
+        const giftPickSel = document.getElementById('newMedalGiftSelect');
+        if (giftPickSel) {
+          giftPickSel.innerHTML = '<option value="">-- Select Gift or Type Below --</option>' +
+            (d.gifts || []).map(g => `<option value="${g.id}" data-name="${(g.name || '').replace(/"/g, '&quot;')}">${g.name} (${g.id}) - 🪙 ${g.priceCoins}</option>`).join('');
+        }
+
+        // Store table & grant dropdown
+        window._loadedStoreCatalog = d.storeCatalog || [];
+        const grantSel = document.getElementById('grantItemId');
+        grantSel.innerHTML = (d.storeCatalog || []).length
+          ? d.storeCatalog.map(item => `<option value="${item.id}">[${item.category}] ${item.name} (${item.id})</option>`).join('')
+          : '<option value="">-- No Store Items Uploaded Yet --</option>';
+        document.getElementById('storeTableBody').innerHTML = (d.storeCatalog || []).map(item => {
+          const thumb = item.iconUrl
+            ? `<img src="${item.iconUrl}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;border:1px solid var(--border);"/>`
+            : `<span style="font-size:11px;color:var(--muted);">No Image</span>`;
+          const modeLabel = item.unlockMode === 'ADMIN_ONLY'
+            ? '👑 Admin Grant Only'
+            : (item.minLevelRequired > 0 ? `Lv.${item.minLevelRequired}+ • 🪙 ${Number(item.basePrice7Days).toLocaleString()}` : `🪙 ${Number(item.basePrice7Days).toLocaleString()} / 7d`);
+          const isActive = item.active !== false;
+          return `
+            <tr>
+              <td>${thumb}</td>
+              <td><b>${item.name}</b><div style="font-size:11px;color:var(--muted);">${item.id}</div></td>
+              <td><span class="badge ok">${item.category}</span> ${item.animationUrl ? '<span class="badge ok">🎬 Anim</span>' : ''}</td>
+              <td style="font-size:12px;">${modeLabel}</td>
+              <td><span class="badge ${isActive ? 'ok' : 'ban'}">${isActive ? 'LIVE' : 'PAUSED'}</span></td>
+              <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button class="secondary" style="padding:5px 9px;font-size:11px;" onclick="toggleStoreItemActive('${item.id}', ${!isActive})">${isActive ? '⏸️' : '▶️'}</button>
+                  <button class="secondary" style="padding:5px 9px;font-size:11px;" onclick="editStoreItem('${item.id}')">✏️ Edit</button>
+                  <button class="danger" style="padding:5px 9px;font-size:11px;" onclick="deleteStoreItem('${item.id}')">🗑️</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:18px;">Store is Empty (0 items). Upload an Entry Effect, Theme, Frame, Bubble, Mic Wave, or VIP ID above!</td></tr>';
+
+        // Custom medals table & grant dropdown
+        window._loadedMedals = d.customMedals || [];
+        const medDrop = document.getElementById('medGrantDropdown');
+        if (medDrop) {
+          medDrop.innerHTML = '<option value="">-- Pick Uploaded Medal --</option>' +
+            (d.customMedals || []).map(m => `<option value="${m.id}">[${m.category}] ${m.name} (${m.id})</option>`).join('');
+        }
+        document.getElementById('medalsTableBody').innerHTML = (d.customMedals || []).map(m => {
+          const iconHtml = m.iconUrl
+            ? `<img src="${m.iconUrl}" style="width:42px;height:42px;object-fit:contain;border-radius:8px;border:1px solid var(--border);background:#0f162a;"/>`
+            : `<span style="font-size:18px;">🏅</span>`;
+          const ts = Array.isArray(m.starThresholds) ? m.starThresholds.join(' / ') : (m.targetProgress || '-');
+          const valText = Number(m.validityDays || 0) > 0 ? `${m.validityDays} Days` : 'Permanent';
+          const isActive = m.active !== false;
+          return `
+            <tr>
+              <td>${iconHtml}</td>
+              <td><b>${m.name}</b><div style="font-size:11px;color:var(--muted);">${m.id}</div></td>
+              <td><span class="badge ok">${m.category}</span></td>
+              <td style="font-size:11.5px;"><b>${m.linkType || 'ALL_GIFTS_COINS'}</b>${m.linkedGiftName ? ` (${m.linkedGiftName})` : ''}<div style="color:var(--muted);">★ ${ts}</div></td>
+              <td style="font-size:12px;">${valText}</td>
+              <td><span class="badge ${isActive ? 'ok' : 'ban'}">${isActive ? 'LIVE' : 'PAUSED'}</span></td>
+              <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button class="secondary" style="padding:5px 9px;font-size:11px;" onclick="toggleMedalActive('${m.id}', ${!isActive})">${isActive ? '⏸️' : '▶️'}</button>
+                  <button class="secondary" style="padding:5px 9px;font-size:11px;" onclick="editMedalItem('${m.id}')">✏️ Edit</button>
+                  <button class="danger" style="padding:5px 9px;font-size:11px;" onclick="deleteMedalItem('${m.id}')">🗑️</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:18px;">Medals Section is Empty (0 medals). Upload a Medal & set its Unlock Logic above!</td></tr>';
+
+        // Events / Popular Banners table
+        const unpackedEvents = (d.events || []).map((ev, idx) => unpackBannerEvent(ev, idx)).sort((a, b) => (a.sortOrder || 999) - (b.sortOrder || 999));
+        window._loadedEvents = unpackedEvents;
+        const evPickSel = document.getElementById('newMedalEventSelect');
+        if (evPickSel) {
+          evPickSel.innerHTML = '<option value="">-- Any Live Event --</option>' +
+            unpackedEvents.map(ev => `<option value="${ev.id}" data-title="${(ev.title || '').replace(/"/g, '&quot;')}">${ev.title || ev.id} (${ev.id})</option>`).join('');
+        }
+        const actionLabels = {
+          WALLET: '💰 Opens Wallet Screen',
+          INVITE: '🎁 Opens Invite Friends Screen',
+          STORE: '🏎️ Opens Store Screen',
+          MY_ITEMS: '🎒 Opens My Items Screen',
+          LEVEL: '👑 Opens Level Screen',
+          MEDAL: '🏅 Opens Medals Screen',
+          CUSTOMER_SERVICE: '💬 Opens Customer Service Chat',
+          ROOM: '🎤 Joins Voice Room',
+          FEEDBACK: '📝 Opens Feedback Screen',
+          WEBVIEW: '🌐 Opens In-App WebView'
+        };
+        document.getElementById('eventsTableBody').innerHTML = unpackedEvents.map((ev, idx) => {
+          const isActive = ev.active !== false;
+          const act = String(ev.actionType || 'WEBVIEW').toUpperCase();
+          const thumbHtml = ev.bannerUrl
+            ? `<img src="${ev.bannerUrl}" style="width:124px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--border);" />`
+            : `<span style="font-size:11px;color:var(--muted);">Default Banner</span>`;
+          let clickInfo = '';
+          if (act !== 'WEBVIEW') {
+            clickInfo = `<span class="badge ok" style="font-size:11.5px;">${actionLabels[act] || act}${act === 'ROOM' && ev.targetRoomId ? ' (#' + ev.targetRoomId + ')' : ''}</span>`;
+          } else if (ev.webUrl) {
+            clickInfo = `<a href="${ev.webUrl}" target="_blank" style="color:var(--accent);font-size:12px;word-break:break-all;">🌐 ${ev.webUrl}</a>`;
+          } else {
+            clickInfo = `<span style="font-size:12px;color:var(--muted);">📄 Built-in Event WebView${ev.targetRoomId ? ' (Room: ' + ev.targetRoomId + ')' : ''}</span>`;
+          }
+          return `
+            <tr>
+              <td><b>#${ev.sortOrder || (idx + 1)}</b></td>
+              <td>${thumbHtml}</td>
+              <td>
+                <b>${ev.title || '-'}</b>
+                <div style="font-size:11.5px;color:var(--muted);max-width:260px;margin-top:2px;">${ev.subtitle || ''}</div>
+              </td>
+              <td>${clickInfo}</td>
+              <td>
+                <span class="badge ${isActive ? 'ok' : 'ban'}">${isActive ? 'LIVE' : 'PAUSED'}</span>
+              </td>
+              <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button class="secondary" style="padding:5px 9px; font-size:11px;" onclick="toggleEventBanner('${ev.id}', ${!isActive})">${isActive ? '⏸️ Pause' : '▶️ Live'}</button>
+                  <button class="secondary" style="padding:5px 9px; font-size:11px;" onclick="editEventBanner('${ev.id}')">✏️ Edit</button>
+                  <button class="danger" style="padding:5px 9px; font-size:11px;" onclick="deleteEvent('${ev.id}')">🗑️ Delete</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:18px;">No custom banners published yet. Upload a banner above to push it live!</td></tr>';
+
+        // Live rooms
+        document.getElementById('roomsTableBody').innerHTML = (d.rooms || []).map(r => `
+          <tr>
+            <td><b>${r.id}</b></td>
+            <td>${r.title}</td>
+            <td>${r.hostName} (${r.hostId})</td>
+            <td>🔥 ${r.onlineCount}</td>
+            <td>${r.isOfficial ? '<span class="badge ok">OFFICIAL</span>' : '-'}</td>
+            <td>
+              <button class="secondary" style="padding:5px 9px; font-size:11px;" onclick="toggleOfficialRoom('${r.id}', ${!r.isOfficial})">${r.isOfficial ? 'Unpin' : 'Pin Official'}</button>
+              <button class="danger" style="padding:5px 9px; font-size:11px;" onclick="closeRoom('${r.id}')">Close Room</button>
+            </td>
+          </tr>
+        `).join('');
+
+        // Reports & Feedbacks
+        const repRows = [
+          ...(d.reports || []).map(r => ({ type: 'REPORT', from: r.reporterId, target: r.targetUserId || r.targetRoomId, text: `${r.reason}: ${r.details || ''}`, ts: r.createdAt })),
+          ...(d.feedbacks || []).map(f => ({ type: 'FEEDBACK', from: f.userId, target: f.contact || '-', text: `[${f.type}] ${f.content}`, ts: f.createdAt }))
+        ];
+        document.getElementById('reportsTableBody').innerHTML = repRows.map(r => `
+          <tr>
+            <td><span class="badge ${r.type === 'REPORT' ? 'ban' : 'ok'}">${r.type}</span></td>
+            <td>${r.from}</td>
+            <td>${r.target}</td>
+            <td>${r.text}</td>
+            <td style="font-size:11px; color:var(--muted);">${new Date(r.ts || Date.now()).toLocaleString()}</td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    }
+
+    function prefillWallet(uid) {
+      document.getElementById('walUserId').value = uid;
+      switchTab('wallet', document.querySelectorAll('.nav-btn')[1]);
+    }
+
+    async function quickToggleBan(uid, ban) {
+      document.getElementById('banUserId').value = uid;
+      await banUser(ban);
+    }
+
+    async function banUser(ban) {
+      try {
+        const userId = document.getElementById('banUserId').value.trim();
+        const reason = document.getElementById('banReason').value.trim();
+        await api('/api/admin/users/ban', 'POST', { userId, ban, reason });
+        showToast(ban ? `User ${userId} BANNED!` : `User ${userId} UNBANNED!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function banDevice(ban) {
+      try {
+        const target = document.getElementById('banDeviceTarget').value.trim();
+        const reason = document.getElementById('banReason').value.trim();
+        await api('/api/admin/devices/ban', 'POST', { target, ban, reason });
+        showToast(ban ? `Hardware Device BANNED for ${target}!` : `Hardware Device UNBANNED!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function resetDeviceSlots() {
+      try {
+        const target = document.getElementById('banDeviceTarget').value.trim();
+        await api('/api/admin/devices/reset-slots', 'POST', { target });
+        showToast(`3-ID Device Slots reset for ${target || 'target'}!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function adjustWallet() {
+      try {
+        const userId = document.getElementById('walUserId').value.trim();
+        const coinsDelta = Number(document.getElementById('walCoinsDelta').value || 0);
+        const diamondsDelta = Number(document.getElementById('walDiamondsDelta').value || 0);
+        const title = document.getElementById('walNote').value.trim();
+        await api('/api/admin/wallet/adjust', 'POST', { userId, coinsDelta, diamondsDelta, title });
+        showToast(`Wallet updated for ${userId}!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveRechargePack() {
+      try {
+        const packId = document.getElementById('packId').value.trim();
+        const coins = Number(document.getElementById('packCoins').value || 0);
+        const priceInr = Number(document.getElementById('packInr').value || 0);
+        await api('/api/admin/wallet/packs', 'POST', { packId, coins, priceInr });
+        showToast(`Pack ${packId} updated!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveGift() {
+      try {
+        const body = {
+          id: document.getElementById('giftId').value.trim(),
+          name: document.getElementById('giftName').value.trim(),
+          priceCoins: Number(document.getElementById('giftPrice').value || 10),
+          category: document.getElementById('giftCategory').value,
+          tag: document.getElementById('giftTag').value.trim() || 'HOT',
+          icon: document.getElementById('giftIcon').value.trim() || '🎁',
+          animationUrl: document.getElementById('giftAnimUrl').value.trim(),
+          durationSeconds: Number(document.getElementById('giftDuration').value || 3.0)
+        };
+        await api('/api/admin/gifts', 'POST', body);
+        showToast(`Gift "${body.name}" saved & pushed to all users!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    function onMp4VideoSelected(input) {
+      const f = input.files && input.files[0];
+      const label = document.getElementById('mp4VideoFileName');
+      if (!f) {
+        label.textContent = 'No MP4 video selected yet (MIME: video/mp4)';
+        label.style.color = 'var(--muted)';
+        return;
+      }
+      const mb = (f.size / (1024 * 1024)).toFixed(2);
+      label.textContent = '✅ Selected: ' + f.name + ' (' + mb + ' MB)';
+      label.style.color = 'var(--accent)';
+    }
+
+    function onMp4ThumbSelected(input) {
+      const f = input.files && input.files[0];
+      const label = document.getElementById('mp4ThumbFileName');
+      const preview = document.getElementById('mp4ThumbPreview');
+      if (!f) {
+        label.textContent = 'No thumbnail icon selected yet (image/*)';
+        label.style.color = 'var(--muted)';
+        preview.style.display = 'none';
+        preview.src = '';
+        return;
+      }
+      label.textContent = '✅ Selected: ' + f.name;
+      label.style.color = '#ffc83d';
+      preview.src = URL.createObjectURL(f);
+      preview.style.display = 'block';
+    }
+
+    function setMp4UploadProgress(pct, stageText) {
+      const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+      document.getElementById('mp4ProgressWrap').style.display = 'block';
+      document.getElementById('mp4ProgressPct').textContent = clamped + '%';
+      document.getElementById('mp4ProgressStage').textContent = stageText || 'Uploading...';
+      document.getElementById('mp4ProgressFill').style.width = clamped + '%';
+      const btn = document.getElementById('btnUploadSaveMp4Gift');
+      if (btn.disabled) btn.textContent = '⏳ Uploading... ' + clamped + '%';
+    }
+
+    function uploadDirectToCloudinary(sign, file, onFraction) {
+      return new Promise((resolve, reject) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('api_key', sign.apiKey);
+        formData.append('timestamp', String(sign.timestamp));
+        formData.append('signature', sign.signature);
+        formData.append('folder', sign.folder);
+        formData.append('public_id', sign.publicId);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', sign.uploadUrl, true);
+        xhr.upload.onprogress = function(ev) {
+          if (ev.lengthComputable && ev.total > 0) {
+            onFraction(ev.loaded / ev.total);
+          }
+        };
+        xhr.onload = function() {
+          try {
+            const data = JSON.parse(xhr.responseText || '{}');
+            if (xhr.status >= 200 && xhr.status < 300 && (data.secure_url || data.url)) {
+              resolve(data.secure_url || data.url);
+            } else {
+              reject(new Error((data.error && data.error.message) || ('Cloudinary HTTP ' + xhr.status)));
+            }
+          } catch (err) {
+            reject(new Error('Cloudinary upload failed (HTTP ' + xhr.status + ')'));
+          }
+        };
+        xhr.onerror = function() {
+          reject(new Error('Network error while uploading directly to Cloudinary'));
+        };
+        xhr.send(formData);
+      });
+    }
+
+    async function uploadAndSaveMp4Gift() {
+      const name = document.getElementById('mp4GiftName').value.trim();
+      const price = Math.floor(Number(document.getElementById('mp4GiftPrice').value || 0));
+      const category = document.getElementById('mp4GiftCategory').value || 'Gifts';
+      const tag = document.getElementById('mp4GiftTag').value.trim() || 'MP4';
+      const videoFile = document.getElementById('mp4VideoFile').files[0];
+      const thumbFile = document.getElementById('mp4ThumbFile').files[0];
+
+      if (!name) return showToast('Please enter Gift Name', true);
+      if (!price || price <= 0) return showToast('Please enter a valid Coin Price (Int)', true);
+      if (!videoFile) return showToast('Please select an MP4 Video', true);
+      if (!thumbFile) return showToast('Please select a Thumbnail Icon', true);
+
+      const submitBtn = document.getElementById('btnUploadSaveMp4Gift');
+      const vidBtn = document.getElementById('btnSelectMp4Video');
+      const thumbBtn = document.getElementById('btnSelectThumbIcon');
+      submitBtn.disabled = true;
+      vidBtn.disabled = true;
+      thumbBtn.disabled = true;
+
+      try {
+        setMp4UploadProgress(1, 'Preparing direct Cloudinary video upload...');
+        const videoSign = await api('/api/admin/cloudinary/sign', 'POST', { kind: 'video' });
+        const videoUrl = await uploadDirectToCloudinary(
+          videoSign,
+          videoFile,
+          (f) => setMp4UploadProgress(2 + f * 73, 'Uploading MP4 video directly to Cloudinary...')
+        );
+
+        setMp4UploadProgress(76, 'Preparing direct Cloudinary thumbnail upload...');
+        const iconSign = await api('/api/admin/cloudinary/sign', 'POST', { kind: 'icon' });
+        const iconUrl = await uploadDirectToCloudinary(
+          iconSign,
+          thumbFile,
+          (f) => setMp4UploadProgress(76 + f * 16, 'Uploading Thumbnail icon directly to Cloudinary...')
+        );
+
+        setMp4UploadProgress(94, 'Saving Cloudinary gift URLs to database...');
+        await api('/api/admin/gifts/upload-save', 'POST', {
+          name,
+          price,
+          category,
+          tag,
+          videoUrl,
+          iconUrl,
+          type: 'mp4',
+          durationSeconds: 5.5
+        });
+
+        setMp4UploadProgress(100, 'Gift uploaded to Cloudinary & saved!');
+        showToast('Gift "' + name + '" uploaded to Cloudinary & saved!');
+        document.getElementById('mp4GiftName').value = '';
+        document.getElementById('mp4GiftPrice').value = '';
+        document.getElementById('mp4VideoFile').value = '';
+        document.getElementById('mp4ThumbFile').value = '';
+        onMp4VideoSelected(document.getElementById('mp4VideoFile'));
+        onMp4ThumbSelected(document.getElementById('mp4ThumbFile'));
+        loadAll();
+      } catch (e) {
+        showToast('Upload failed: ' + e.message, true);
+      } finally {
+        submitBtn.disabled = false;
+        vidBtn.disabled = false;
+        thumbBtn.disabled = false;
+        submitBtn.textContent = '☁️ Upload & Save Gift';
+      }
+    }
+
+    async function deleteGift(id) {
+      try {
+        await api('/api/admin/gifts/' + encodeURIComponent(id), 'DELETE');
+        showToast(`Gift ${id} deleted!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function grantStoreItem() {
+      try {
+        const userId = document.getElementById('grantUserId').value.trim();
+        const itemId = document.getElementById('grantItemId').value;
+        const days = Number(document.getElementById('grantDays').value || 7);
+        await api('/api/admin/store/grant', 'POST', { userId, itemId, days });
+        showToast(`Granted ${itemId} to ${userId} for ${days} days!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function uploadCatalogMediaSmart(file, compressedDataUrl, kind, scope, onStatus) {
+      if (!file && !compressedDataUrl) return '';
+      const safeKind = kind === 'video' ? 'video' : 'icon';
+      const safeScope = scope === 'medals' ? 'medals' : 'store';
+      let lastCloudErr = '';
+
+      if (file) {
+        // 1. Direct Browser -> Cloudinary signed upload (zero Render memory overhead, preserves GIF/WebP/PNG/MP4)
+        try {
+          if (onStatus) onStatus(`Signing Cloudinary ${safeScope} upload...`);
+          let sign = null;
+          try {
+            sign = await api('/api/admin/catalog/cloudinary-sign', 'POST', { kind: safeKind, scope: safeScope });
+          } catch (_) {
+            sign = await api('/api/admin/cloudinary/sign', 'POST', { kind: safeKind });
+          }
+          if (sign && sign.uploadUrl && sign.apiKey) {
+            return await uploadDirectToCloudinary(sign, file, (f) => {
+              if (onStatus) onStatus(`☁️ Uploading ${safeScope} ${safeKind} to Cloudinary... ${Math.round(f * 100)}%`);
+            });
+          }
+        } catch (err1) {
+          lastCloudErr = err1 && err1.message ? err1.message : 'Cloudinary sign/direct upload failed';
+        }
+
+        // 2. Fallback: Raw binary relay to backend -> Cloudinary (bypasses 2MB JSON limit)
+        try {
+          if (onStatus) onStatus(`Relaying ${safeKind} via server to Cloudinary...`);
+          const base = document.getElementById('adminServerUrl').value.trim().replace(/\/$/, '');
+          const key = document.getElementById('adminKey').value.trim();
+          const res = await fetch(`${base}/api/admin/catalog/upload-raw?kind=${encodeURIComponent(safeKind)}&scope=${encodeURIComponent(safeScope)}`, {
+            method: 'PUT',
+            headers: {
+              'x-admin-key': key,
+              'Content-Type': file.type || (safeKind === 'video' ? 'video/mp4' : 'application/octet-stream')
+            },
+            body: file
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && (data.url || data.downloadUrl)) {
+            return data.url || data.downloadUrl;
+          }
+          if (data && data.error) lastCloudErr = data.error;
+        } catch (err2) {
+          if (!lastCloudErr && err2 && err2.message) lastCloudErr = err2.message;
+        }
+      }
+
+      // 3. Only if server Cloudinary isn't configured, allow small icon inline fallback via upload-media
+      if (compressedDataUrl) {
+        if (onStatus) onStatus('Saving fallback icon...');
+        const up = await api('/api/admin/catalog/upload-media', 'POST', {
+          kind: safeKind,
+          scope: safeScope,
+          dataUrl: compressedDataUrl
+        });
+        if (up && (up.url || up.downloadUrl)) {
+          return up.url || up.downloadUrl;
+        }
+      }
+      throw new Error(lastCloudErr || 'Cloudinary upload failed. Check CLOUDINARY env variables on Render.');
+    }
+
+    var selectedStoreIconDataUrl = '';
+    var selectedMedalIconDataUrl = '';
+
+    function quickSelectStoreCat(cat) {
+      document.getElementById('stItemCat').value = cat;
+      onStoreCategoryChanged();
+      document.getElementById('stItemName').focus();
+    }
+
+    function onStoreCategoryChanged() {
+      const cat = document.getElementById('stItemCat').value;
+      document.getElementById('stSpecialIdWrap').style.display = cat === 'SPECIAL_ID' ? 'block' : 'none';
+      document.getElementById('stBubbleTextWrap').style.display = cat === 'BUBBLE' ? 'block' : 'none';
+      document.getElementById('stMicColorWrap').style.display = cat === 'MIC_WAVE' ? 'block' : 'none';
+      const hintEl = document.getElementById('stCatHint');
+      if (hintEl) {
+        const hints = {
+          VEHICLE: '🏎️ Entry Effect (Vehicle): Upload Thumbnail Icon + Optional MP4 Video / WebP animation that plays when entering a Voice Room!',
+          THEME: '🎨 Room Theme: Upload a 9:16 Room Background photo. When user equips it, it becomes their Voice Room wallpaper!',
+          FRAME: '🖼️ Avatar Frame: Upload a transparent PNG / WebP avatar frame border. Appears around user Avatar in Profile, Me & Room Seats!',
+          BUBBLE: '💬 Chat Bubble: Upload a Chat Bubble background image and set sample preview text.',
+          MIC_WAVE: '〰️ Mic Wave: Upload icon & pick the glowing Mic Wave hex color.',
+          SPECIAL_ID: '🆔 VIP Special ID: Enter the VIP ID number (e.g. 888888) and upload badge icon.'
+        };
+        hintEl.textContent = hints[cat] || hints.FRAME;
+      }
+    }
+
+    function onStoreUnlockModeChanged() {
+      const mode = document.getElementById('stUnlockMode').value;
+      document.getElementById('stMinLevelWrap').style.display = mode === 'MIN_LEVEL' ? 'block' : 'none';
+    }
+
+    async function onStoreIconFileSelected(input) {
+      const f = input.files && input.files[0];
+      const lbl = document.getElementById('stIconFileName');
+      const prev = document.getElementById('stIconPreview');
+      if (!f) {
+        selectedStoreIconDataUrl = '';
+        lbl.textContent = 'No image selected';
+        prev.style.display = 'none';
+        return;
+      }
+      try {
+        selectedStoreIconDataUrl = await compressImageFileToDataUrl(f, 900, 900, 0.90, true);
+        lbl.textContent = '✅ ' + f.name;
+        prev.src = URL.createObjectURL(f);
+        prev.style.display = 'block';
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    function onStoreAnimFileSelected(input) {
+      const f = input.files && input.files[0];
+      const lbl = document.getElementById('stAnimFileName');
+      if (!f) {
+        lbl.textContent = 'Optional animation file';
+        return;
+      }
+      const mb = (f.size / (1024 * 1024)).toFixed(2);
+      lbl.textContent = '✅ ' + f.name + ' (' + mb + ' MB)';
+    }
+
+    function previewStoreIconUrl(u) {
+      const prev = document.getElementById('stIconPreview');
+      if ((u || '').trim()) {
+        prev.src = u.trim();
+        prev.style.display = 'block';
+      } else if (!selectedStoreIconDataUrl) {
+        prev.style.display = 'none';
+      }
+    }
+
+    function resetStoreForm() {
+      document.getElementById('stEditMode').value = '';
+      document.getElementById('stItemId').value = '';
+      document.getElementById('stItemName').value = '';
+      document.getElementById('stItemSubtitle').value = '';
+      document.getElementById('stItemCat').value = 'VEHICLE';
+      document.getElementById('stUnlockMode').value = 'PURCHASE';
+      document.getElementById('stMinLevel').value = '0';
+      document.getElementById('stItemPrice').value = '12000';
+      document.getElementById('stItemRarity').value = '2';
+      document.getElementById('stSpecialIdNum').value = '';
+      document.getElementById('stBubbleText').value = '';
+      document.getElementById('stMicColorHex').value = '#19CC9D';
+      document.getElementById('stItemIconUrl').value = '';
+      document.getElementById('stItemAnimUrl').value = '';
+      document.getElementById('stIconFile').value = '';
+      document.getElementById('stAnimFile').value = '';
+      selectedStoreIconDataUrl = '';
+      document.getElementById('stIconFileName').textContent = 'No image selected';
+      document.getElementById('stAnimFileName').textContent = 'Optional animation file';
+      document.getElementById('stIconPreview').style.display = 'none';
+      document.getElementById('btnSaveStoreItem').textContent = '🚀 Upload & Publish Store Item';
+      document.getElementById('btnCancelStoreEdit').style.display = 'none';
+      onStoreCategoryChanged();
+      onStoreUnlockModeChanged();
+    }
+
+    function editStoreItem(id) {
+      const item = (window._loadedStoreCatalog || []).find(x => x.id === id);
+      if (!item) return;
+      document.getElementById('stEditMode').value = item.id;
+      document.getElementById('stItemId').value = item.id;
+      document.getElementById('stItemName').value = item.name || '';
+      document.getElementById('stItemSubtitle').value = item.subtitle || '';
+      document.getElementById('stItemCat').value = item.category || 'FRAME';
+      document.getElementById('stUnlockMode').value = item.unlockMode || 'PURCHASE';
+      document.getElementById('stMinLevel').value = item.minLevelRequired || 0;
+      document.getElementById('stItemPrice').value = item.basePrice7Days || 10000;
+      document.getElementById('stItemRarity').value = item.rarityStars || 2;
+      document.getElementById('stSpecialIdNum').value = item.specialIdNumber || '';
+      document.getElementById('stBubbleText').value = item.sampleBubbleText || '';
+      if (item.micWaveColorHex) {
+        document.getElementById('stMicColorHex').value = '#' + (item.micWaveColorHex & 0xFFFFFF).toString(16).padStart(6, '0').toUpperCase();
+      }
+      document.getElementById('stItemIconUrl').value = item.iconUrl || '';
+      document.getElementById('stItemAnimUrl').value = item.animationUrl || '';
+      selectedStoreIconDataUrl = '';
+      previewStoreIconUrl(item.iconUrl || '');
+      document.getElementById('btnSaveStoreItem').textContent = '💾 Save Updated Store Item';
+      document.getElementById('btnCancelStoreEdit').style.display = 'inline-block';
+      onStoreCategoryChanged();
+      onStoreUnlockModeChanged();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function saveStoreCatalogItem() {
+      const btn = document.getElementById('btnSaveStoreItem');
+      const progWrap = document.getElementById('stUploadProgressWrap');
+      const progTxt = document.getElementById('stUploadProgressText');
+      try {
+        const name = document.getElementById('stItemName').value.trim();
+        if (!name) return showToast('Please enter Item Name', true);
+        const cat = document.getElementById('stItemCat').value;
+        const customId = document.getElementById('stItemId').value.trim() || `${cat.toLowerCase().slice(0, 3)}_${Date.now()}`;
+
+        btn.disabled = true;
+        let iconUrl = document.getElementById('stItemIconUrl').value.trim();
+        let animationUrl = document.getElementById('stItemAnimUrl').value.trim();
+        const iconFile = document.getElementById('stIconFile').files[0];
+        const animFile = document.getElementById('stAnimFile').files[0];
+
+        if (iconFile || (!iconUrl && selectedStoreIconDataUrl)) {
+          progWrap.style.display = 'block';
+          iconUrl = await uploadCatalogMediaSmart(iconFile, selectedStoreIconDataUrl, 'icon', 'store', (m) => { progTxt.textContent = m; });
+        }
+        if (animFile) {
+          progWrap.style.display = 'block';
+          const animKind = animFile.type.startsWith('video/') ? 'video' : 'icon';
+          animationUrl = await uploadCatalogMediaSmart(animFile, '', animKind, 'store', (m) => { progTxt.textContent = m; });
+        }
+
+        const body = {
+          id: customId,
+          name,
+          subtitle: document.getElementById('stItemSubtitle').value.trim(),
+          category: cat,
+          unlockMode: document.getElementById('stUnlockMode').value,
+          minLevelRequired: Number(document.getElementById('stMinLevel').value || 0),
+          basePrice7Days: Number(document.getElementById('stItemPrice').value || 10000),
+          rarityStars: Number(document.getElementById('stItemRarity').value || 2),
+          iconUrl,
+          animationUrl,
+          hasAnimationPlay: Boolean(animationUrl) || cat === 'VEHICLE' || cat === 'MIC_WAVE',
+          specialIdNumber: document.getElementById('stSpecialIdNum').value.trim(),
+          sampleBubbleText: document.getElementById('stBubbleText').value.trim(),
+          micWaveColorHex: document.getElementById('stMicColorHex').value.trim(),
+          active: true
+        };
+        await api('/api/admin/store/catalog', 'POST', body);
+        showToast(`Store item "${body.name}" published live!`);
+        resetStoreForm();
+        loadAll();
+      } catch (e) {
+        showToast(e.message, true);
+      } finally {
+        btn.disabled = false;
+        progWrap.style.display = 'none';
+      }
+    }
+
+    async function toggleStoreItemActive(id, active) {
+      try {
+        await api('/api/admin/store/toggle', 'POST', { id, active });
+        showToast(active ? 'Store item is now LIVE!' : 'Store item paused!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteStoreItem(id) {
+      try {
+        await api('/api/admin/store/catalog/' + encodeURIComponent(id), 'DELETE');
+        showToast(`Store item ${id} removed!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteAllStoreItems() {
+      if (!confirm('Are you sure you want to CLEAR ALL items from Store?')) return;
+      try {
+        await api('/api/admin/store/catalog', 'DELETE');
+        showToast('All Store items cleared!');
+        resetStoreForm();
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    function applyMedalPreset(linkType) {
+      document.getElementById('newMedalLinkType').value = linkType;
+      if (linkType === 'ALL_GIFTS_COINS' || linkType === 'SPECIFIC_GIFT' || linkType === 'ALL_GIFTS_COUNT' || linkType === 'GIFTS_RECEIVED_COINS') {
+        document.getElementById('newMedalCat').value = 'GIFT';
+      } else if (linkType === 'LOGIN_DAYS' || linkType === 'DAILY_CHECKIN_COUNT' || linkType === 'EVENT_PARTICIPATION') {
+        document.getElementById('newMedalCat').value = 'ACTIVITY';
+      } else {
+        document.getElementById('newMedalCat').value = 'ACHIEVEMENT';
+      }
+      onMedalLinkTypeChanged(true);
+      document.getElementById('newMedalName').focus();
+    }
+
+    function onMedalLinkTypeChanged(applyDefaults = false) {
+      const lt = document.getElementById('newMedalLinkType').value;
+      const isSpecific = lt === 'SPECIFIC_GIFT';
+      const isEvent = lt === 'EVENT_PARTICIPATION';
+      const isManual = lt === 'MANUAL_ADMIN';
+      document.getElementById('medalGiftPickerWrap').style.display = isSpecific ? 'block' : 'none';
+      document.getElementById('medalGiftMetricWrap').style.display = isSpecific ? 'block' : 'none';
+      document.getElementById('medalGiftIdWrap').style.display = isSpecific ? 'block' : 'none';
+      document.getElementById('medalGiftNameWrap').style.display = isSpecific ? 'block' : 'none';
+      document.getElementById('medalEventPickerWrap').style.display = isEvent ? 'block' : 'none';
+      document.getElementById('medalEventIdWrap').style.display = isEvent ? 'block' : 'none';
+      document.getElementById('medalEventTitleWrap').style.display = isEvent ? 'block' : 'none';
+      document.getElementById('medalThresholdsWrap').style.display = isManual ? 'none' : 'grid';
+
+      const unitMap = {
+        GAME_PLAYS_COUNT: 'Rounds',
+        GAME_WINS: 'Coins Won',
+        GAME_WINS_COUNT: 'Wins',
+        ALL_GIFTS_COINS: 'Coins',
+        ALL_GIFTS_COUNT: 'Gifts',
+        SPECIFIC_GIFT: 'Target',
+        GIFTS_RECEIVED_COINS: 'Coins',
+        LOGIN_DAYS: 'Days (1=First Login)',
+        DAILY_CHECKIN_COUNT: 'Check-Ins',
+        EVENT_PARTICIPATION: 'Events',
+        RECHARGE_COINS: 'Coins',
+        WEALTH_LEVEL: 'Level',
+        CHARM_POINTS: 'Charm',
+        INVITES_COUNT: 'Invites',
+        ROOM_JOIN_COUNT: 'Joins',
+      };
+      const u = unitMap[lt] || 'Target';
+      ['1', '2', '3', '4'].forEach((n) => {
+        const el = document.getElementById('lblStar' + n);
+        if (el) el.textContent = `${n}★ (${u})`;
+      });
+
+      if (applyDefaults && !document.getElementById('medalEditMode').value) {
+        const coinDefaults = ['ALL_GIFTS_COINS', 'GIFTS_RECEIVED_COINS', 'RECHARGE_COINS', 'GAME_WINS', 'CHARM_POINTS'].includes(lt);
+        const def = coinDefaults ? [10000, 50000, 250000, 1000000] : (lt === 'WEALTH_LEVEL' ? [5, 15, 30, 50] : [1, 5, 15, 30]);
+        document.getElementById('newMedalStar1').value = String(def[0]);
+        document.getElementById('newMedalStar2').value = String(def[1]);
+        document.getElementById('newMedalStar3').value = String(def[2]);
+        document.getElementById('newMedalStar4').value = String(def[3]);
+      }
+    }
+
+    function onMedalGiftPicked() {
+      const sel = document.getElementById('newMedalGiftSelect');
+      const opt = sel.options[sel.selectedIndex];
+      if (!sel.value) return;
+      document.getElementById('newMedalGiftId').value = sel.value;
+      document.getElementById('newMedalGiftName').value = opt?.getAttribute('data-name') || '';
+    }
+
+    function onMedalEventPicked() {
+      const sel = document.getElementById('newMedalEventSelect');
+      const opt = sel.options[sel.selectedIndex];
+      document.getElementById('newMedalEventId').value = sel.value || '';
+      document.getElementById('newMedalEventTitle').value = sel.value ? (opt?.getAttribute('data-title') || '') : '';
+    }
+
+    async function onMedalIconFileSelected(input) {
+      const f = input.files && input.files[0];
+      const lbl = document.getElementById('medalIconFileName');
+      const prev = document.getElementById('medalIconPreview');
+      if (!f) {
+        selectedMedalIconDataUrl = '';
+        lbl.textContent = 'No image selected';
+        prev.style.display = 'none';
+        return;
+      }
+      try {
+        selectedMedalIconDataUrl = await compressImageFileToDataUrl(f, 512, 512, 0.92, true);
+        lbl.textContent = '✅ ' + f.name;
+        prev.src = URL.createObjectURL(f);
+        prev.style.display = 'block';
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    function previewMedalIconUrl(u) {
+      const prev = document.getElementById('medalIconPreview');
+      if ((u || '').trim()) {
+        prev.src = u.trim();
+        prev.style.display = 'block';
+      } else if (!selectedMedalIconDataUrl) {
+        prev.style.display = 'none';
+      }
+    }
+
+    function resetMedalForm() {
+      document.getElementById('medalEditMode').value = '';
+      document.getElementById('newMedalId').value = '';
+      document.getElementById('newMedalName').value = '';
+      document.getElementById('newMedalCat').value = 'ACHIEVEMENT';
+      document.getElementById('newMedalLinkType').value = 'GAME_PLAYS_COUNT';
+      document.getElementById('newMedalMetricMode').value = 'COINS';
+      document.getElementById('newMedalGiftSelect').value = '';
+      document.getElementById('newMedalGiftId').value = '';
+      document.getElementById('newMedalGiftName').value = '';
+      document.getElementById('newMedalEventSelect').value = '';
+      document.getElementById('newMedalEventId').value = '';
+      document.getElementById('newMedalEventTitle').value = '';
+      document.getElementById('newMedalValidityDays').value = '0';
+      document.getElementById('newMedalDesc').value = 'Complete the target in live rooms to unlock & upgrade 1★ to 4★.';
+      document.getElementById('newMedalCondition').value = '';
+      document.getElementById('newMedalIconUrl').value = '';
+      document.getElementById('medalIconFile').value = '';
+      selectedMedalIconDataUrl = '';
+      document.getElementById('medalIconFileName').textContent = 'No image selected';
+      document.getElementById('medalIconPreview').style.display = 'none';
+      document.getElementById('btnSaveMedal').textContent = '🚀 Upload & Publish Medal Live';
+      document.getElementById('btnCancelMedalEdit').style.display = 'none';
+      onMedalLinkTypeChanged(true);
+    }
+
+    function editMedalItem(id) {
+      const m = (window._loadedMedals || []).find(x => x.id === id);
+      if (!m) return;
+      document.getElementById('medalEditMode').value = m.id;
+      document.getElementById('newMedalId').value = m.id;
+      document.getElementById('newMedalName').value = m.name || '';
+      document.getElementById('newMedalCat').value = m.category || 'ACHIEVEMENT';
+      document.getElementById('newMedalLinkType').value = m.linkType || 'ALL_GIFTS_COINS';
+      document.getElementById('newMedalMetricMode').value = m.metricMode || 'COINS';
+      document.getElementById('newMedalGiftId').value = m.linkedGiftId || '';
+      document.getElementById('newMedalGiftName').value = m.linkedGiftName || '';
+      document.getElementById('newMedalEventId').value = m.linkedEventId || '';
+      document.getElementById('newMedalEventTitle').value = m.linkedEventTitle || '';
+      const ts = Array.isArray(m.starThresholds) ? m.starThresholds : [1, 5, 15, 30];
+      document.getElementById('newMedalStar1').value = ts[0] || 1;
+      document.getElementById('newMedalStar2').value = ts[1] || ts[0] || 1;
+      document.getElementById('newMedalStar3').value = ts[2] || ts[1] || 1;
+      document.getElementById('newMedalStar4').value = ts[3] || ts[2] || 1;
+      document.getElementById('newMedalValidityDays').value = m.validityDays || 0;
+      document.getElementById('newMedalDesc').value = m.description || '';
+      document.getElementById('newMedalCondition').value = m.unlockCondition || '';
+      document.getElementById('newMedalIconUrl').value = m.iconUrl || '';
+      selectedMedalIconDataUrl = '';
+      previewMedalIconUrl(m.iconUrl || '');
+      document.getElementById('btnSaveMedal').textContent = '💾 Save Updated Medal';
+      document.getElementById('btnCancelMedalEdit').style.display = 'inline-block';
+      onMedalLinkTypeChanged(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    async function updateUserMedalAndLevel() {
+      try {
+        const userId = document.getElementById('medUserId').value.trim();
+        const level = document.getElementById('medLevel').value.trim();
+        const medalId = document.getElementById('medIdToGrant').value.trim() || document.getElementById('medGrantDropdown').value;
+        await api('/api/admin/users/medal-level', 'POST', {
+          userId,
+          level: level === '' ? null : Number(level),
+          medalId
+        });
+        showToast(`Updated Level/Medal for ${userId}!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function revokeUserMedal() {
+      try {
+        const userId = document.getElementById('medUserId').value.trim();
+        const medalId = document.getElementById('medIdToGrant').value.trim() || document.getElementById('medGrantDropdown').value;
+        await api('/api/admin/medals/revoke', 'POST', { userId, medalId });
+        showToast(`Revoked medal ${medalId} from ${userId}!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveCustomMedal() {
+      const btn = document.getElementById('btnSaveMedal');
+      const progWrap = document.getElementById('medalUploadProgressWrap');
+      const progTxt = document.getElementById('medalUploadProgressText');
+      try {
+        const name = document.getElementById('newMedalName').value.trim();
+        if (!name) return showToast('Please enter Medal Title', true);
+        btn.disabled = true;
+        btn.textContent = '⏳ Uploading & Saving...';
+
+        let iconUrl = document.getElementById('newMedalIconUrl').value.trim();
+        const iconFile = document.getElementById('medalIconFile').files[0];
+        if (iconFile || (!iconUrl && selectedMedalIconDataUrl)) {
+          if (progWrap) progWrap.style.display = 'block';
+          iconUrl = await uploadCatalogMediaSmart(iconFile, selectedMedalIconDataUrl, 'icon', 'medals', (m) => {
+            if (progTxt) progTxt.textContent = m;
+          });
+        }
+
+        const linkType = document.getElementById('newMedalLinkType').value || 'ALL_GIFTS_COINS';
+        const s1 = Number(document.getElementById('newMedalStar1')?.value || 1);
+        const s2 = Number(document.getElementById('newMedalStar2')?.value || s1);
+        const s3 = Number(document.getElementById('newMedalStar3')?.value || s2);
+        const s4 = Number(document.getElementById('newMedalStar4')?.value || s3);
+        const body = {
+          id: document.getElementById('newMedalId').value.trim() || `m_${Date.now()}`,
+          name,
+          category: document.getElementById('newMedalCat')?.value || 'ACHIEVEMENT',
+          linkType,
+          metricMode: document.getElementById('newMedalMetricMode')?.value || 'COINS',
+          linkedGiftId: document.getElementById('newMedalGiftId')?.value.trim() || '',
+          linkedGiftName: document.getElementById('newMedalGiftName')?.value.trim() || '',
+          linkedEventId: document.getElementById('newMedalEventId')?.value.trim() || '',
+          linkedEventTitle: document.getElementById('newMedalEventTitle')?.value.trim() || '',
+          starThresholds: linkType === 'MANUAL_ADMIN' ? [1, 1, 1, 1] : [s1, s2, s3, s4],
+          starCount: 4,
+          validityDays: Number(document.getElementById('newMedalValidityDays')?.value || 0),
+          description: document.getElementById('newMedalDesc').value.trim(),
+          unlockCondition: document.getElementById('newMedalCondition').value.trim(),
+          iconUrl,
+          active: true
+        };
+        await api('/api/admin/medals', 'POST', body);
+        showToast(`Medal "${body.name}" published live!`);
+        resetMedalForm();
+        loadAll();
+      } catch (e) {
+        showToast(e.message, true);
+      } finally {
+        btn.disabled = false;
+        if (progWrap) progWrap.style.display = 'none';
+        if (!document.getElementById('medalEditMode').value) {
+          btn.textContent = '🚀 Upload & Publish Medal Live';
+        }
+      }
+    }
+
+    async function toggleMedalActive(id, active) {
+      try {
+        await api('/api/admin/medals/toggle', 'POST', { id, active });
+        showToast(active ? 'Medal is now LIVE!' : 'Medal paused!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteMedalItem(id) {
+      try {
+        await api('/api/admin/medals/' + encodeURIComponent(id), 'DELETE');
+        showToast(`Medal ${id} deleted!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteAllMedals() {
+      if (!confirm('Are you sure you want to CLEAR ALL Medals?')) return;
+      try {
+        await api('/api/admin/medals', 'DELETE');
+        showToast('All Medals cleared!');
+        resetMedalForm();
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function sendBroadcast() {
+      try {
+        const body = {
+          targetUserId: document.getElementById('bcTargetUserId').value.trim(),
+          title: document.getElementById('bcTitle').value.trim(),
+          content: document.getElementById('bcContent').value.trim(),
+          channel: document.getElementById('bcChannel').value
+        };
+        await api('/api/admin/broadcast', 'POST', body);
+        showToast('Live broadcast sent!');
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    var selectedBannerDataUrl = '';
+
+    function compressImageFileToDataUrl(file, maxW = 1080, maxH = 420, quality = 0.86, preserveTransparency = false) {
+      return new Promise((resolve, reject) => {
+        const mime = String(file.type || '').toLowerCase();
+        const isTransparentType = preserveTransparency && (mime.includes('png') || mime.includes('webp') || mime.includes('gif'));
+        if (isTransparentType && mime.includes('gif') && file.size <= 600000) {
+          const rGif = new FileReader();
+          rGif.onload = (ev) => resolve(ev.target.result);
+          rGif.onerror = () => reject(new Error('Failed to read GIF file'));
+          rGif.readAsDataURL(file);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const img = new Image();
+          img.onload = function() {
+            let w = img.width || maxW;
+            let h = img.height || maxH;
+            const scale = Math.min(1, maxW / w, maxH / h);
+            w = Math.max(1, Math.round(w * scale));
+            h = Math.max(1, Math.round(h * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(isTransparentType ? canvas.toDataURL('image/png') : canvas.toDataURL('image/jpeg', quality));
+          };
+          img.onerror = () => reject(new Error('Invalid image file'));
+          img.src = e.target.result;
+        };
+        reader.onerror = () => reject(new Error('Failed to read image file'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function onBannerFileSelected(input) {
+      const f = input.files && input.files[0];
+      const label = document.getElementById('evBannerFileName');
+      const preview = document.getElementById('evBannerPreview');
+      if (!f) {
+        selectedBannerDataUrl = '';
+        label.textContent = 'No gallery image selected';
+        label.style.color = 'var(--muted)';
+        preview.style.display = 'none';
+        return;
+      }
+      try {
+        label.textContent = '⏳ Processing ' + f.name + '...';
+        selectedBannerDataUrl = await compressImageFileToDataUrl(f, 1080, 420, 0.86);
+        label.textContent = '✅ Ready: ' + f.name;
+        label.style.color = 'var(--accent)';
+        preview.src = selectedBannerDataUrl;
+        preview.style.display = 'block';
+      } catch (e) {
+        showToast(e.message, true);
+      }
+    }
+
+    function onBannerUrlTyped(url) {
+      const trimmed = (url || '').trim();
+      const preview = document.getElementById('evBannerPreview');
+      if (trimmed) {
+        preview.src = trimmed;
+        preview.style.display = 'block';
+      } else if (!selectedBannerDataUrl) {
+        preview.style.display = 'none';
+      }
+    }
+
+    function resetBannerForm() {
+      document.getElementById('evEditId').value = '';
+      document.getElementById('evTitle').value = '';
+      document.getElementById('evSubtitle').value = '';
+      document.getElementById('evActionType').value = 'WEBVIEW';
+      document.getElementById('evWebUrl').value = '';
+      document.getElementById('evTargetRoomId').value = '';
+      document.getElementById('evSortOrder').value = ((window._loadedEvents || []).length + 1);
+      document.getElementById('evBannerUrl').value = '';
+      document.getElementById('evBannerFile').value = '';
+      selectedBannerDataUrl = '';
+      document.getElementById('evBannerFileName').textContent = 'No gallery image selected';
+      document.getElementById('evBannerFileName').style.color = 'var(--muted)';
+      document.getElementById('evBannerPreview').style.display = 'none';
+      document.getElementById('btnPublishBanner').textContent = '🚀 Upload & Publish Live Banner';
+      document.getElementById('btnCancelBannerEdit').style.display = 'none';
+    }
+
+    function editEventBanner(id) {
+      const ev = (window._loadedEvents || []).find(x => x.id === id);
+      if (!ev) return;
+      document.getElementById('evEditId').value = ev.id;
+      document.getElementById('evTitle').value = ev.title || '';
+      document.getElementById('evSubtitle').value = ev.subtitle || '';
+      document.getElementById('evActionType').value = String(ev.actionType || 'WEBVIEW').toUpperCase();
+      document.getElementById('evWebUrl').value = ev.webUrl || '';
+      document.getElementById('evTargetRoomId').value = ev.targetRoomId || '';
+      document.getElementById('evSortOrder').value = ev.sortOrder || 1;
+      document.getElementById('evBannerUrl').value = (ev.bannerUrl && !ev.bannerUrl.startsWith('data:')) ? ev.bannerUrl : '';
+      selectedBannerDataUrl = (ev.bannerUrl && ev.bannerUrl.startsWith('data:')) ? ev.bannerUrl : '';
+      const preview = document.getElementById('evBannerPreview');
+      if (ev.bannerUrl) {
+        preview.src = ev.bannerUrl;
+        preview.style.display = 'block';
+      } else {
+        preview.style.display = 'none';
+      }
+      document.getElementById('btnPublishBanner').textContent = '💾 Save Updated Banner Live';
+      document.getElementById('btnCancelBannerEdit').style.display = 'inline-block';
+    }
+
+    async function addEventBanner() {
+      const btn = document.getElementById('btnPublishBanner');
+      try {
+        const id = document.getElementById('evEditId').value.trim();
+        const title = document.getElementById('evTitle').value.trim() || 'Official Event';
+        const subtitle = document.getElementById('evSubtitle').value.trim();
+        const actionType = document.getElementById('evActionType').value || 'WEBVIEW';
+        const webUrl = document.getElementById('evWebUrl').value.trim();
+        const targetRoomId = document.getElementById('evTargetRoomId').value.trim();
+        const sortOrder = Number(document.getElementById('evSortOrder').value || 1);
+        let bannerUrl = document.getElementById('evBannerUrl').value.trim();
+        const fileInput = document.getElementById('evBannerFile');
+        const rawFile = fileInput && fileInput.files && fileInput.files[0];
+
+        btn.disabled = true;
+        btn.textContent = '⏳ Uploading & Publishing...';
+
+        if (!bannerUrl && rawFile) {
+          // Try direct Cloudinary upload first; if unavailable, use compressed high-res Data-URL
+          try {
+            const iconSign = await api('/api/admin/cloudinary/sign', 'POST', { kind: 'icon' });
+            if (iconSign && iconSign.uploadUrl && iconSign.apiKey) {
+              bannerUrl = await uploadDirectToCloudinary(iconSign, rawFile, () => {});
+            }
+          } catch (_) {
+            bannerUrl = selectedBannerDataUrl;
+          }
+        }
+        if (!bannerUrl && selectedBannerDataUrl) {
+          bannerUrl = selectedBannerDataUrl;
+        }
+        if (!bannerUrl) {
+          throw new Error('Please upload a Banner Photo from Gallery or paste a Banner Image URL');
+        }
+
+        if (id) {
+          try {
+            await api('/api/admin/events/' + encodeURIComponent(id), 'DELETE');
+          } catch (_) {}
+        }
+
+        const packedBannerUrl = packBannerUrlWithMeta(bannerUrl, {
+          actionType,
+          webUrl,
+          targetRoomId,
+          sortOrder,
+          active: true
+        });
+
+        await api('/api/admin/events', 'POST', {
+          id,
+          title,
+          subtitle,
+          bannerUrl: packedBannerUrl,
+          actionType,
+          webUrl,
+          targetRoomId,
+          sortOrder,
+          active: true
+        });
+        showToast(id ? 'Banner updated & pushed live to Popular!' : 'New Banner published live to Popular!');
+        resetBannerForm();
+        loadAll();
+      } catch (e) {
+        showToast(e.message, true);
+      } finally {
+        btn.disabled = false;
+        if (!document.getElementById('evEditId').value) {
+          btn.textContent = '🚀 Upload & Publish Live Banner';
+        }
+      }
+    }
+
+    async function toggleEventBanner(id, active) {
+      try {
+        try {
+          await api('/api/admin/events/toggle', 'POST', { id, active });
+        } catch (_) {
+          const ev = (window._loadedEvents || []).find(x => x.id === id);
+          if (ev) {
+            await api('/api/admin/events/' + encodeURIComponent(id), 'DELETE');
+            const packedBannerUrl = packBannerUrlWithMeta(ev.bannerUrl, {
+              actionType: ev.actionType || 'WEBVIEW',
+              webUrl: ev.webUrl || '',
+              targetRoomId: ev.targetRoomId || '',
+              sortOrder: ev.sortOrder || 1,
+              active: Boolean(active)
+            });
+            await api('/api/admin/events', 'POST', {
+              id: ev.id,
+              title: ev.title,
+              subtitle: ev.subtitle,
+              bannerUrl: packedBannerUrl,
+              actionType: ev.actionType || 'WEBVIEW',
+              webUrl: ev.webUrl || '',
+              targetRoomId: ev.targetRoomId || '',
+              sortOrder: ev.sortOrder || 1,
+              active: Boolean(active)
+            });
+          }
+        }
+        showToast(active ? 'Banner is now LIVE!' : 'Banner paused!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteEvent(id) {
+      try {
+        await api('/api/admin/events/' + encodeURIComponent(id), 'DELETE');
+        showToast('Banner deleted live!');
+        if (document.getElementById('evEditId').value === id) resetBannerForm();
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function deleteAllEventBanners() {
+      if (!confirm('Are you sure you want to delete ALL banners from Popular?')) return;
+      try {
+        try {
+          await api('/api/admin/events', 'DELETE');
+        } catch (_) {}
+        for (const ev of (window._loadedEvents || [])) {
+          if (ev && ev.id) {
+            try {
+              await api('/api/admin/events/' + encodeURIComponent(ev.id), 'DELETE');
+            } catch (_) {}
+          }
+        }
+        showToast('All banners deleted live!');
+        resetBannerForm();
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function saveGlobalRules() {
+      try {
+        const body = {
+          maxUnfollowedDmMessages: Number(document.getElementById('ruleDmLimit').value || 5),
+          maxAccountsPerDevice: Number(document.getElementById('ruleMaxAccounts').value || 3),
+          inviteDay1Coins: Number(document.getElementById('ruleInvDay1').value || 50000),
+          inviteDay3Coins: Number(document.getElementById('ruleInvDay3').value || 150000),
+          inviteFriendWelcomeCoins: Number(document.getElementById('ruleInvWelcome').value || 250000),
+          dailyCheckInCoins: Number(document.getElementById('ruleCheckInCoins').value || 10)
+        };
+        await api('/api/admin/rules', 'POST', body);
+        showToast('Global Rules saved & pushed live!');
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function toggleOfficialRoom(roomId, isOfficial) {
+      try {
+        await api('/api/admin/rooms/official', 'POST', { roomId, isOfficial });
+        showToast(`Room ${roomId} official status updated!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    async function closeRoom(roomId) {
+      try {
+        await api('/api/admin/rooms/close', 'POST', { roomId });
+        showToast(`Room ${roomId} closed!`);
+        loadAll();
+      } catch (e) { showToast(e.message, true); }
+    }
+
+    onStoreCategoryChanged();
+    onMedalLinkTypeChanged(true);
+    loadAll();
+  </script>
+</body>
+</html>

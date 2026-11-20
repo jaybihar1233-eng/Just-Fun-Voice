@@ -801,6 +801,7 @@ function computeAndCacheGreedySettlement(roundNumber) {
         greedyUserBalances.set(b.userId, prevBal + winAmount);
         if (typeof catalogManager !== 'undefined' && catalogManager) {
           catalogManager.onGameCoinsWon(b.userId, winAmount);
+          catalogManager.onGameRoundWon(b.userId);
         }
 
         const userProf = users.get(b.userId) || {};
@@ -4747,13 +4748,15 @@ wss.on('connection', (ws, req) => {
         }
         firestoreStore.markUserDirty(uid);
         evaluateInviteDay3Retention(uid, msg.deviceIntegrity || null);
-        safeSend(ws, { type: 'USER_REGISTERED', profile: users.get(uid) || merged });
+        if (catalogManager) catalogManager.onUserLogin(uid);
+        const latestProf = users.get(uid) || merged;
+        safeSend(ws, { type: 'USER_REGISTERED', profile: latestProf });
         safeSend(ws, {
           type: 'MEDAL_PROGRESS_SYNC',
           userId: uid,
-          medalProgress: merged.medalProgress || {},
-          unlockedMedalIds: merged.unlockedMedalIds || [],
-          equippedMedalIds: merged.equippedMedalIds || [],
+          medalProgress: latestProf.medalProgress || {},
+          unlockedMedalIds: latestProf.unlockedMedalIds || [],
+          equippedMedalIds: latestProf.equippedMedalIds || [],
         });
         safeSend(ws, buildSocialSnapshotForUser(uid));
         safeSend(ws, buildInviteStatePayload(uid, msg.deviceIntegrity || null));
@@ -5411,6 +5414,7 @@ wss.on('connection', (ws, req) => {
             existing.receivedGifts = gifts.slice(0, 30);
           }
           users.set(tUid, existing);
+          if (catalogManager) catalogManager.onCharmUpdated(tUid, existing.totalCharmPoints);
           firestoreStore.markUserDirty(tUid);
           pushSocialSyncToUser(tUid);
 
@@ -5769,6 +5773,7 @@ wss.on('connection', (ws, req) => {
         safeSend(ws, buildContributionsPayload(room));
         globalRocketBroadcast?.pushActiveBroadcasts(ws);
         broadcastLiveRoomsToHome();
+        if (catalogManager) catalogManager.onRoomJoined(userId, roomId);
         break;
       }
 
@@ -6109,6 +6114,7 @@ wss.on('connection', (ws, req) => {
         safeSend(ws, buildWalletStatePayload(uid, integrity));
         safeSend(ws, { type: 'WALLET_BALANCE_SYNC', serverBalance: newBal });
         safeSend(ws, { type: 'WALLET_ACTION_RESULT', action: 'CHECKIN', success: true, message: `Daily Check-In +${DAILY_CHECKIN_REWARD_COINS} Coins credited!` });
+        if (catalogManager) catalogManager.onDailyCheckIn(uid);
         break;
       }
 
@@ -6915,6 +6921,16 @@ wss.on('connection', (ws, req) => {
         });
 
         queueGreedyCrowdBetEvent(curRound, uid, betSlots, chipIdx, slotTotals, ws);
+        if (catalogManager) catalogManager.onGamePlayed(uid, curRound);
+        break;
+      }
+
+      case 'EVENT_PARTICIPATE': {
+        const uid = String(meta.userId || msg.userId || '').trim();
+        if (!uid) break;
+        if (catalogManager) {
+          catalogManager.onEventParticipated(uid, msg.eventId || '', msg.eventTitle || '');
+        }
         break;
       }
 

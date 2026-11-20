@@ -141,6 +141,7 @@ function initProfileAndMedalsModule(ctx) {
 
     let anyMedalUpdated = false;
     const newlyUnlockedOrUpgraded = [];
+    const safeGiftCount = Math.max(1, Number(giftCount || 1));
 
     for (const medal of DYNAMIC_MEDALS_CATALOG.values()) {
       if (!medal || medal.active === false) continue;
@@ -149,23 +150,26 @@ function initProfileAndMedalsModule(ctx) {
       const linkedName = String(medal.linkedGiftName || '').trim().toLowerCase();
       const sentId = String(resolvedGiftId || '').trim().toLowerCase();
       const sentName = String(resolvedGiftName || '').trim().toLowerCase();
+      const metricMode = String(medal.metricMode || 'COINS').toUpperCase();
 
-      let matches = false;
+      let delta = 0;
       if (linkType === 'ALL_GIFTS_COINS') {
-        matches = true;
+        delta = Number(coinsSpent || 0);
+      } else if (linkType === 'ALL_GIFTS_COUNT') {
+        delta = safeGiftCount;
       } else if (linkType === 'SPECIFIC_GIFT') {
-        if (linkedId && sentId && (linkedId === sentId || sentId.includes(linkedId))) {
-          matches = true;
-        } else if (linkedName && sentName && (linkedName === sentName || sentName.includes(linkedName))) {
-          matches = true;
+        const idMatches = linkedId && sentId && (linkedId === sentId || sentId.includes(linkedId));
+        const nameMatches = linkedName && sentName && (linkedName === sentName || sentName.includes(linkedName));
+        if (idMatches || nameMatches) {
+          delta = metricMode === 'COUNT' ? safeGiftCount : Number(coinsSpent || 0);
         }
       }
 
-      if (!matches) continue;
+      if (delta <= 0) continue;
 
       const prevEntry = medalProgress[medal.id] || { progress: 0, stars: 0 };
       const prevStars = Number(prevEntry.stars || 0);
-      const newProgress = Number(prevEntry.progress || 0) + Number(coinsSpent || 0);
+      const newProgress = Number(prevEntry.progress || 0) + delta;
       const thresholds = normalizeStarThresholds(medal.starThresholds, medal.targetProgress || 1000000);
       const newStars = calculateStarsForProgress(newProgress, thresholds);
       const nextTarget = getNextThresholdForProgress(newProgress, thresholds);
@@ -223,6 +227,71 @@ function initProfileAndMedalsModule(ctx) {
             `🏅 Medal Upgraded to ${upg.stars}★!`,
             `Congratulations! Your "${upg.medalName}" medal reached ${upg.stars} Star${upg.stars > 1 ? 's' : ''}!`
           );
+        }
+      }
+    }
+
+    // 3. Update receivers' GIFTS_RECEIVED_COINS medals
+    const recvCoins = Math.max(1, Number(perTargetCharm || Math.floor(coinsSpent / Math.max(1, uniqueTargets.length))));
+    for (const tUid of uniqueTargets) {
+      if (!tUid) continue;
+      const rUid = String(tUid);
+      const receiver = users.get(rUid);
+      if (!receiver) continue;
+      const rProg = receiver.medalProgress && typeof receiver.medalProgress === 'object'
+        ? { ...receiver.medalProgress }
+        : {};
+      const rUnlocked = new Set(Array.isArray(receiver.unlockedMedalIds) ? receiver.unlockedMedalIds : []);
+      const rEquipped = Array.isArray(receiver.equippedMedalIds)
+        ? receiver.equippedMedalIds.filter(Boolean).slice(0, 10)
+        : [];
+      let rChanged = false;
+      const rUpgrades = [];
+
+      for (const medal of DYNAMIC_MEDALS_CATALOG.values()) {
+        if (!medal || medal.active === false) continue;
+        if (String(medal.linkType || '').toUpperCase() !== 'GIFTS_RECEIVED_COINS') continue;
+        const prevEntry = rProg[medal.id] || { progress: 0, stars: 0 };
+        const prevStars = Number(prevEntry.stars || 0);
+        const newProgress = Number(prevEntry.progress || 0) + recvCoins;
+        const thresholds = normalizeStarThresholds(medal.starThresholds, medal.targetProgress || 100000);
+        const newStars = calculateStarsForProgress(newProgress, thresholds);
+        const nextTarget = getNextThresholdForProgress(newProgress, thresholds);
+
+        rProg[medal.id] = { progress: newProgress, stars: newStars, nextTarget, updatedAtMs: Date.now() };
+        rChanged = true;
+        if (newStars >= 1) {
+          rUnlocked.add(medal.id);
+          if (!rEquipped.includes(medal.id) && rEquipped.length < 10) rEquipped.push(medal.id);
+        }
+        if (newStars > prevStars) {
+          rUpgrades.push({ medalName: medal.name, stars: newStars });
+        }
+      }
+
+      if (rChanged) {
+        receiver.medalProgress = rProg;
+        receiver.unlockedMedalIds = Array.from(rUnlocked);
+        receiver.equippedMedalIds = rEquipped.slice(0, 10);
+        users.set(rUid, receiver);
+        firestoreStore.markUserDirty(rUid);
+        sendToUser(rUid, {
+          type: 'MEDAL_PROGRESS_SYNC',
+          userId: rUid,
+          medalProgress: receiver.medalProgress,
+          unlockedMedalIds: receiver.unlockedMedalIds,
+          equippedMedalIds: receiver.equippedMedalIds,
+        });
+        sendToUser(rUid, { type: 'USER_REGISTERED', profile: receiver });
+        if (typeof pushSocialSyncToUser === 'function') pushSocialSyncToUser(rUid);
+        for (const upg of rUpgrades) {
+          if (typeof pushSystemNotificationToUser === 'function') {
+            pushSystemNotificationToUser(
+              rUid,
+              `🏅 Medal Upgraded to ${upg.stars}★!`,
+              `Congratulations! Your "${upg.medalName}" medal reached ${upg.stars}★!`
+            );
+          }
         }
       }
     }
