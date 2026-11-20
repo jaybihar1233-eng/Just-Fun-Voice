@@ -420,13 +420,21 @@ function pruneAndSyncUserStore(uid, nowMs = Date.now()) {
   }
   const prof = users.get(uid);
   if (prof) {
+    const eqFrameId = inv.equipped.FRAME || '';
+    const eqFrameSpec = eqFrameId ? STORE_CATALOG[eqFrameId] : null;
+    const eqFrameAnim = eqFrameSpec ? String(eqFrameSpec.animationUrl || '').trim() : '';
+    const isVideoAnim = /\.(mp4|webm|mov|mkv)(\?|$)/i.test(eqFrameAnim) || eqFrameAnim.includes('/video/upload/') || eqFrameAnim.startsWith('data:video');
+    const eqFrameMediaUrl = eqFrameSpec ? ((!isVideoAnim && eqFrameAnim) ? eqFrameAnim : String(eqFrameSpec.iconUrl || '').trim()) : '';
+    const eqFrameScale = eqFrameSpec ? Math.max(90, Math.min(280, Math.round(Number(eqFrameSpec.frameScalePercent || 128)))) : 128;
     const eqVehicleId = inv.equipped.VEHICLE || '';
     const eqVehicleSpec = eqVehicleId ? STORE_CATALOG[eqVehicleId] : null;
     const eqThemeId = inv.equipped.THEME || '';
     const eqThemeSpec = eqThemeId ? STORE_CATALOG[eqThemeId] : null;
     const eqSidId = inv.equipped.SPECIAL_ID || '';
     const eqSidSpec = eqSidId ? STORE_CATALOG[eqSidId] : null;
-    prof.equippedFrameId = inv.equipped.FRAME || '';
+    prof.equippedFrameId = eqFrameId;
+    prof.equippedFrameUrl = eqFrameMediaUrl;
+    prof.equippedFrameScalePercent = eqFrameScale;
     prof.equippedVehicleId = eqVehicleId;
     prof.equippedVehicleName = eqVehicleSpec ? eqVehicleSpec.name : '';
     prof.equippedThemeId = eqThemeId;
@@ -2397,7 +2405,35 @@ function buildRoomActiveUsers(room) {
   return list;
 }
 
+function resolveUserEquippedFrameMedia(uid) {
+  if (!uid) return { url: '', scale: 128 };
+  const inv = userStoreInventories.get(String(uid));
+  const frameId = inv?.equipped?.FRAME || users.get(String(uid))?.equippedFrameId || '';
+  const spec = frameId ? STORE_CATALOG[frameId] : null;
+  if (!spec) return { url: '', scale: 128 };
+  const anim = String(spec.animationUrl || '').trim();
+  const isVideo = /\.(mp4|webm|mov|mkv)(\?|$)/i.test(anim) || anim.includes('/video/upload/') || anim.startsWith('data:video');
+  const url = (!isVideo && anim) ? anim : String(spec.iconUrl || '').trim();
+  const scale = Math.max(90, Math.min(280, Math.round(Number(spec.frameScalePercent || 128))));
+  return { url, scale };
+}
+
 function buildRoomSnapshot(room) {
+  const hostFrame = resolveUserEquippedFrameMedia(room.hostId || room.id);
+  const enrichedSeats = Array.isArray(room.seats)
+    ? room.seats.map((seat) => {
+        if (!seat || !seat.occupiedUserId) return seat;
+        const eq = resolveUserEquippedFrameMedia(seat.occupiedUserId);
+        if (eq.url) {
+          return {
+            ...seat,
+            occupiedFrameUrl: eq.url,
+            occupiedFrameScalePercent: eq.scale,
+          };
+        }
+        return seat;
+      })
+    : [];
   return {
     type: 'ROOM_STATE',
     room: {
@@ -2407,6 +2443,8 @@ function buildRoomSnapshot(room) {
       hostId: room.hostId,
       hostName: room.hostName,
       hostAvatarUri: room.hostAvatarUri,
+      hostFrameUrl: hostFrame.url,
+      hostFrameScalePercent: hostFrame.scale,
       isHostOnOtherSeat: room.isHostOnOtherSeat,
       isHostMuted: room.isHostMuted,
       themeDrawableResId: room.themeDrawableResId,
@@ -2421,7 +2459,7 @@ function buildRoomSnapshot(room) {
       adminUsers: room.adminUsers,
       bannedChatUserIds: room.bannedChatUserIds,
       bannedUsers: room.bannedUsers,
-      seats: room.seats,
+      seats: enrichedSeats,
       messages: room.messages.slice(-60),
       rocketState: buildRocketStatePayload(room),
     },
@@ -6361,10 +6399,12 @@ wss.on('connection', (ws, req) => {
       }
 
       case 'STORE_BUY_ITEM': {
-        const uid = String(meta.userId || msg.userId || '');
+        const uid = String(msg.userId || meta.userId || '').trim();
         const integrity = msg.deviceIntegrity || null;
-        if (!uid) break;
-        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!uid) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'BUY', success: false, error: 'Missing user ID.' });
+          break;
+        }
         if (!meta.userId) meta.userId = uid;
         addUserSocket(uid, ws);
         if (integrity) recordUserDeviceIntegrity(uid, integrity);
@@ -6634,10 +6674,12 @@ wss.on('connection', (ws, req) => {
       }
 
       case 'STORE_EQUIP_ITEM': {
-        const uid = String(meta.userId || msg.userId || '');
+        const uid = String(msg.userId || meta.userId || '').trim();
         const integrity = msg.deviceIntegrity || null;
-        if (!uid) break;
-        if (meta.userId && msg.userId && String(msg.userId) !== meta.userId) break;
+        if (!uid) {
+          safeSend(ws, { type: 'STORE_ACTION_RESULT', action: 'EQUIP', success: false, error: 'Missing user ID.' });
+          break;
+        }
         if (!meta.userId) meta.userId = uid;
         addUserSocket(uid, ws);
         if (integrity) recordUserDeviceIntegrity(uid, integrity);
@@ -6682,7 +6724,16 @@ wss.on('connection', (ws, req) => {
 
         const activeRoomId = findUserActiveRoomId(uid);
         if (activeRoomId && rooms.has(activeRoomId)) {
-          broadcastToRoom(rooms.get(activeRoomId), buildRoomSnapshot(rooms.get(activeRoomId)));
+          const activeRoom = rooms.get(activeRoomId);
+          if (itemSpec.category === 'FRAME' && Array.isArray(activeRoom.seats)) {
+            const latestFrame = resolveUserEquippedFrameMedia(uid);
+            activeRoom.seats = activeRoom.seats.map((s) =>
+              s && s.occupiedUserId === uid
+                ? { ...s, occupiedFrameUrl: latestFrame.url || null, occupiedFrameScalePercent: latestFrame.scale }
+                : s
+            );
+          }
+          broadcastToRoom(activeRoom, buildRoomSnapshot(activeRoom));
         }
 
         safeSend(ws, buildStoreStatePayload(uid, integrity));

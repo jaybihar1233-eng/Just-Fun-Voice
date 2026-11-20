@@ -457,20 +457,28 @@
           <!-- Live Avatar Frame Circular DP Preview & Uniform Size Slider -->
           <div id="stFrameDpPreviewWrap" style="display:none; padding:14px; background:rgba(25,204,157,0.06); border:1px solid rgba(25,204,157,0.28); border-radius:12px; margin-bottom:14px;">
             <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
-              <div style="position:relative; width:132px; height:132px; display:flex; align-items:center; justify-content:center; background:#0b1120; border-radius:14px; border:1px solid var(--border); overflow:hidden;">
-                <div style="width:74px; height:74px; border-radius:50%; background:linear-gradient(135deg,#2563eb,#19cc9d); display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; font-size:20px; border:2px solid #ffe066;">DP</div>
-                <img id="stFrameDpOverlay" src="" style="display:none; position:absolute; width:95px; height:95px; object-fit:contain; pointer-events:none;" />
+              <div style="position:relative; width:220px; height:220px; display:flex; align-items:center; justify-content:center; background:#0b1120; border-radius:16px; border:1px solid var(--border); overflow:hidden;">
+                <div style="width:64px; height:64px; border-radius:50%; background:linear-gradient(135deg,#2563eb,#19cc9d); display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; font-size:18px; border:2px solid #ffe066;">DP</div>
+                <img id="stFrameDpOverlay" crossorigin="anonymous" onload="applyStoreFrameDpSize()" src="" style="display:none; position:absolute; width:82px; height:82px; object-fit:fill; pointer-events:none;" />
               </div>
               <div style="flex:1; min-width:220px;">
-                <div style="font-weight:700; font-size:13.5px; color:#4de8c0; margin-bottom:6px;">🖼️ Live Avatar Frame DP Preview &amp; Size Control</div>
+                <div style="font-weight:700; font-size:13.5px; color:#4de8c0; margin-bottom:6px;">🖼️ Live Avatar Frame DP Preview &amp; Auto-Fit Size Control (90% – 280%)</div>
                 <p style="font-size:12px; color:var(--muted); margin-bottom:10px;">
-                  Ye slider app ki <b>Me, Profile, Chat aur Voice Room</b> sabhi screens par frame ko ek barabar ratio me set karta hai!
+                  Ye ratio app ki <b>Store, Me, Profile, Chat, Host Seat aur Mic Seats</b> par har avatar size ke hisaab se apne aap proportionally set ho jata hai!
                 </p>
-                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
                   <label class="stat-label" style="margin:0;">Frame Size (%):</label>
-                  <input id="stFrameScaleRange" type="range" min="100" max="175" value="128" oninput="onStoreFrameScaleChanged(this.value)" style="flex:1; min-width:140px; accent-color:#19cc9d;" />
-                  <input id="stFrameScale" type="number" min="100" max="180" value="128" oninput="onStoreFrameScaleChanged(this.value)" style="width:76px;" />
+                  <input id="stFrameScaleRange" type="range" min="90" max="280" value="128" oninput="onStoreFrameScaleChanged(this.value)" style="flex:1; min-width:140px; accent-color:#19cc9d;" />
+                  <input id="stFrameScale" type="number" min="90" max="280" value="128" oninput="onStoreFrameScaleChanged(this.value)" style="width:82px;" />
                   <span id="stFrameScaleBadge" class="badge ok">128%</span>
+                </div>
+                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                  <button type="button" class="secondary" style="padding:4px 9px; font-size:11.5px;" onclick="autoFitStoreFrameScale()">✨ Auto-Fit DP</button>
+                  <button type="button" class="secondary" style="padding:4px 8px; font-size:11.5px;" onclick="onStoreFrameScaleChanged(128)">128%</button>
+                  <button type="button" class="secondary" style="padding:4px 8px; font-size:11.5px;" onclick="onStoreFrameScaleChanged(150)">150%</button>
+                  <button type="button" class="secondary" style="padding:4px 8px; font-size:11.5px;" onclick="onStoreFrameScaleChanged(180)">180%</button>
+                  <button type="button" class="secondary" style="padding:4px 8px; font-size:11.5px;" onclick="onStoreFrameScaleChanged(210)">210%</button>
+                  <button type="button" class="secondary" style="padding:4px 8px; font-size:11.5px;" onclick="onStoreFrameScaleChanged(245)">245%</button>
                 </div>
               </div>
             </div>
@@ -1506,6 +1514,20 @@
       document.getElementById('stItemName').focus();
     }
 
+    function applyStoreFrameDpSize() {
+      const ov = document.getElementById('stFrameDpOverlay');
+      if (!ov) return;
+      const scaleVal = Math.max(90, Math.min(280, Number(document.getElementById('stFrameScale')?.value || 128)));
+      const shortPx = 64 * (scaleVal / 100);
+      const natW = ov.naturalWidth || 1;
+      const natH = ov.naturalHeight || 1;
+      const safeAspect = Math.max(0.45, Math.min(2.25, natW / natH));
+      const targetW = safeAspect >= 1 ? Math.round(shortPx * safeAspect) : Math.round(shortPx);
+      const targetH = safeAspect >= 1 ? Math.round(shortPx) : Math.round(shortPx / safeAspect);
+      ov.style.width = targetW + 'px';
+      ov.style.height = targetH + 'px';
+    }
+
     function updateStoreFrameDpOverlay() {
       const ov = document.getElementById('stFrameDpOverlay');
       if (!ov) return;
@@ -1519,26 +1541,70 @@
       else if (animUrl && !/\.mp4(\?|$)/i.test(animUrl)) src = animUrl;
       else if (iconUrl) src = iconUrl;
       if (src) {
-        ov.src = src;
+        if (ov.src !== src) ov.src = src;
         ov.style.display = 'block';
       } else {
         ov.style.display = 'none';
       }
-      const scaleVal = Math.max(100, Math.min(180, Number(document.getElementById('stFrameScale')?.value || 128)));
-      const px = Math.round(74 * (scaleVal / 100));
-      ov.style.width = px + 'px';
-      ov.style.height = px + 'px';
+      applyStoreFrameDpSize();
     }
 
     function onStoreFrameScaleChanged(val) {
-      const n = Math.max(100, Math.min(180, Math.round(Number(val || 128))));
+      const n = Math.max(90, Math.min(280, Math.round(Number(val || 128))));
       const numEl = document.getElementById('stFrameScale');
       const rngEl = document.getElementById('stFrameScaleRange');
       const bdgEl = document.getElementById('stFrameScaleBadge');
       if (numEl) numEl.value = String(n);
-      if (rngEl) rngEl.value = String(Math.min(175, n));
+      if (rngEl) rngEl.value = String(n);
       if (bdgEl) bdgEl.textContent = n + '%';
       updateStoreFrameDpOverlay();
+    }
+
+    function autoFitStoreFrameScale() {
+      const ov = document.getElementById('stFrameDpOverlay');
+      if (!ov || !ov.src || !ov.complete || !ov.naturalWidth || !ov.naturalHeight) {
+        onStoreFrameScaleChanged(145);
+        return;
+      }
+      try {
+        // Draw at TRUE aspect ratio (short side = 160px) so non-square frames (e.g. 510x339 or 16:9) measure exact circle hole!
+        const shortSide = 160;
+        const aspect = Math.max(0.45, Math.min(2.25, ov.naturalWidth / ov.naturalHeight));
+        const cw = aspect >= 1 ? Math.round(shortSide * aspect) : shortSide;
+        const ch = aspect >= 1 ? shortSide : Math.round(shortSide / aspect);
+        const canvas = document.createElement('canvas');
+        canvas.width = cw;
+        canvas.height = ch;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(ov, 0, 0, cw, ch);
+        const data = ctx.getImageData(0, 0, cw, ch).data;
+        const cx = cw / 2;
+        const cy = ch / 2;
+        const maxRay = shortSide / 2 - 2;
+        let innerRadii = [];
+        for (let a = 0; a < 24; a++) {
+          const rad = (a * Math.PI * 2) / 24;
+          for (let r = 6; r < maxRay; r++) {
+            const x = Math.round(cx + Math.cos(rad) * r);
+            const y = Math.round(cy + Math.sin(rad) * r);
+            if (x < 0 || y < 0 || x >= cw || y >= ch) break;
+            const alpha = data[(y * cw + x) * 4 + 3];
+            if (alpha > 40) {
+              innerRadii.push(r);
+              break;
+            }
+          }
+        }
+        if (innerRadii.length >= 8) {
+          innerRadii.sort((a, b) => a - b);
+          const medianInnerR = innerRadii[Math.floor(innerRadii.length / 2)];
+          // Ideal: inner transparent hole diameter (2 * medianInnerR) matches ~96% of circular DP diameter
+          const computed = Math.round((shortSide / Math.max(24, medianInnerR * 2)) * 96);
+          onStoreFrameScaleChanged(Math.max(105, Math.min(275, computed)));
+          return;
+        }
+      } catch (e) {}
+      onStoreFrameScaleChanged(145);
     }
 
     function onStoreCategoryChanged() {
