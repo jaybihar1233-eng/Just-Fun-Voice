@@ -484,6 +484,105 @@
             </div>
           </div>
 
+          <!-- Live Chatroom Entry Animation Phone Preview & Playback Configurator (VEHICLE) -->
+          <div id="stEntryPreviewWrap" style="display:none; padding:14px; background:rgba(246,206,62,0.06); border:1px solid rgba(246,206,62,0.32); border-radius:12px; margin-bottom:14px;">
+            <div style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;">
+              <!-- Simulated 9:19 Mini Chatroom Phone Screen -->
+              <div id="stEntryPhoneScreen" style="position:relative; width:212px; height:384px; background:linear-gradient(180deg,#120e24 0%,#1b1536 52%,#0c0a18 100%); border-radius:22px; border:2px solid rgba(246,206,62,0.45); overflow:hidden; flex-shrink:0; box-shadow:0 12px 28px rgba(0,0,0,0.45);">
+                <!-- Room Header -->
+                <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 10px 6px; font-size:9.5px; color:#e2e8f0; background:rgba(0,0,0,0.28);">
+                  <span style="font-weight:700;">🏠 JustFun Room</span>
+                  <span style="color:#f6ce3e;">👥 12</span>
+                </div>
+                <!-- Host Seat -->
+                <div style="display:flex; flex-direction:column; align-items:center; margin-top:6px;">
+                  <div style="width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#f6ce3e,#f59e0b); border:2px solid #fff; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; color:#1a1606;">H</div>
+                  <span style="font-size:8.5px; color:#cbd5e1; margin-top:2px;">Host</span>
+                </div>
+                <!-- 8 Mic Seats Grid -->
+                <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding:10px 14px 6px;">
+                  <div style="display:flex; flex-direction:column; align-items:center;"><div style="width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.2);"></div><span style="font-size:7.5px; color:#94a3b8; margin-top:2px;">No.1</span></div>
+                  <div style="display:flex; flex-direction:column; align-items:center;"><div style="width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.2);"></div><span style="font-size:7.5px; color:#94a3b8; margin-top:2px;">No.2</span></div>
+                  <div style="display:flex; flex-direction:column; align-items:center;"><div style="width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.2);"></div><span style="font-size:7.5px; color:#94a3b8; margin-top:2px;">No.3</span></div>
+                  <div style="display:flex; flex-direction:column; align-items:center;"><div style="width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.2);"></div><span style="font-size:7.5px; color:#94a3b8; margin-top:2px;">No.4</span></div>
+                  <div style="display:flex; flex-direction:column; align-items:center;"><div style="width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.2);"></div><span style="font-size:7.5px; color:#94a3b8; margin-top:2px;">No.5</span></div>
+                  <div style="display:flex; flex-direction:column; align-items:center;"><div style="width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.2);"></div><span style="font-size:7.5px; color:#94a3b8; margin-top:2px;">No.6</span></div>
+                  <div style="display:flex; flex-direction:column; align-items:center;"><div style="width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.2);"></div><span style="font-size:7.5px; color:#94a3b8; margin-top:2px;">No.7</span></div>
+                  <div style="display:flex; flex-direction:column; align-items:center;"><div style="width:26px; height:26px; border-radius:50%; background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.2);"></div><span style="font-size:7.5px; color:#94a3b8; margin-top:2px;">No.8</span></div>
+                </div>
+                <!-- Simulated Chat Messages Area -->
+                <div style="position:absolute; left:10px; right:10px; bottom:38px; display:flex; flex-direction:column; gap:4px; pointer-events:none;">
+                  <div style="background:rgba(0,0,0,0.38); border-radius:8px; padding:4px 7px; font-size:8.5px; color:#cbd5e1; width:fit-content;">Welcome to JustFun Party! 🎉</div>
+                  <div style="background:rgba(0,0,0,0.38); border-radius:8px; padding:4px 7px; font-size:8.5px; color:#fde68a; width:fit-content;">VIP entered the room ✨</div>
+                </div>
+                <!-- Simulated Bottom Action Bar -->
+                <div style="position:absolute; left:0; right:0; bottom:0; height:30px; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:space-around; font-size:11px; color:#94a3b8;">
+                  <span>💬</span><span>🔊</span><span>🎙️</span><span>🎁</span><span>☰</span>
+                </div>
+
+                <!-- LIVE ENTRY ANIMATION STAGE LAYER -->
+                <div id="stEntryStageBox" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; transition:all 0.25s ease;">
+                  <video id="stEntryPreviewVideo" autoplay loop muted playsinline style="display:none; width:100%; height:100%; object-fit:cover; pointer-events:none;"></video>
+                  <img id="stEntryPreviewImg" src="" style="display:none; max-width:100%; max-height:100%; object-fit:contain; pointer-events:none;" />
+                  <div id="stEntryEmptyPlaceholder" style="padding:8px 10px; border-radius:10px; background:rgba(0,0,0,0.55); border:1px dashed rgba(246,206,62,0.5); color:#f6ce3e; font-size:10px; text-align:center; max-width:170px;">
+                    MP4 / GIF / WebP select karein live chatroom preview dekhne ke liye
+                  </div>
+                </div>
+
+                <!-- Simulated VIP Entrance Patti -->
+                <div id="stEntryPattiPreview" style="position:absolute; left:8px; top:166px; padding:4px 10px; border-radius:16px; background:linear-gradient(90deg,rgba(45,16,80,0.95),rgba(110,45,160,0.85)); border:1px solid #f6ce3e; font-size:9px; font-weight:700; color:#ffe082; white-space:nowrap; pointer-events:none; box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+                  🚗 VIP User drives Entry Effect
+                </div>
+              </div>
+
+              <!-- Entry Animation Playback Controls -->
+              <div style="flex:1; min-width:240px;">
+                <div style="font-weight:700; font-size:14px; color:#f6ce3e; margin-bottom:6px;">🎬 Live Chatroom Entry Animation Control</div>
+                <p style="font-size:12px; color:var(--muted); margin-bottom:12px;">
+                  Yahan se set karo ki chatroom me user enter karne par ye animation screen par <b>kahan aur kaise play hoga</b>. Yahi exact setting app ke Chatroom aur Store preview me chalegi!
+                </p>
+
+                <input type="hidden" id="stEntryDisplayMode" value="FULLSCREEN" />
+                <label class="stat-label" style="margin-bottom:6px; display:block;">1. Screen Play Mode (स्क्रीन पर कहाँ चले):</label>
+                <div style="display:grid; grid-template-columns:repeat(2,minmax(120px,1fr)); gap:8px; margin-bottom:12px;">
+                  <button type="button" id="btnEntryMode_FULLSCREEN" class="secondary" style="padding:7px 8px; font-size:12px;" onclick="setStoreEntryDisplayMode('FULLSCREEN')">📱 Full Screen</button>
+                  <button type="button" id="btnEntryMode_CENTER" class="secondary" style="padding:7px 8px; font-size:12px;" onclick="setStoreEntryDisplayMode('CENTER')">🎯 Center Stage</button>
+                  <button type="button" id="btnEntryMode_LOWER" class="secondary" style="padding:7px 8px; font-size:12px;" onclick="setStoreEntryDisplayMode('LOWER')">💬 Lower Chat Area</button>
+                  <button type="button" id="btnEntryMode_DRIVE_ACROSS" class="secondary" style="padding:7px 8px; font-size:12px;" onclick="setStoreEntryDisplayMode('DRIVE_ACROSS')">🏎️ Drive-In Zoom</button>
+                </div>
+
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                  <label class="stat-label" style="margin:0; min-width:110px;">2. Size / Scale (%):</label>
+                  <input id="stEntryScaleRange" type="range" min="40" max="160" value="100" oninput="onStoreEntryConfigChanged()" style="flex:1; min-width:120px; accent-color:#f6ce3e;" />
+                  <input id="stEntryScale" type="number" min="40" max="160" value="100" oninput="document.getElementById('stEntryScaleRange').value=this.value; onStoreEntryConfigChanged()" style="width:74px;" />
+                  <span id="stEntryScaleBadge" class="badge ok">100%</span>
+                </div>
+
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                  <label class="stat-label" style="margin:0; min-width:110px;">3. Up / Down (%):</label>
+                  <input id="stEntryOffsetYRange" type="range" min="-35" max="35" value="0" oninput="onStoreEntryConfigChanged()" style="flex:1; min-width:120px; accent-color:#f6ce3e;" />
+                  <input id="stEntryOffsetY" type="number" min="-35" max="35" value="0" oninput="document.getElementById('stEntryOffsetYRange').value=this.value; onStoreEntryConfigChanged()" style="width:74px;" />
+                  <button type="button" class="secondary" style="padding:4px 8px; font-size:11px;" onclick="document.getElementById('stEntryOffsetYRange').value=0; document.getElementById('stEntryOffsetY').value=0; onStoreEntryConfigChanged()">Center</button>
+                </div>
+
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                  <label class="stat-label" style="margin:0; min-width:110px;">4. Duration (Sec):</label>
+                  <input id="stEntryDurationRange" type="range" min="2" max="12" value="4" oninput="onStoreEntryConfigChanged()" style="flex:1; min-width:120px; accent-color:#f6ce3e;" />
+                  <input id="stEntryDuration" type="number" min="2" max="12" value="4" oninput="document.getElementById('stEntryDurationRange').value=this.value; onStoreEntryConfigChanged()" style="width:74px;" />
+                  <span id="stEntryDurationBadge" class="badge">4s</span>
+                </div>
+
+                <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+                  <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:#e2e8f0; cursor:pointer;">
+                    <input type="checkbox" id="stEntryFeatherEdges" onchange="onStoreEntryConfigChanged()" />
+                    Soft Top/Bottom Edge Blend (Alpha Feather)
+                  </label>
+                  <button type="button" style="padding:6px 12px; font-size:12px;" onclick="replayStoreEntryPreview()">▶ Play Entry Preview</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div id="stUploadProgressWrap" style="display:none; margin-bottom:12px; padding:10px 12px; background:rgba(25,204,157,0.1); border:1px solid var(--accent); border-radius:10px;">
             <span id="stUploadProgressText" style="font-size:12.5px; color:var(--accent); font-weight:600;">Uploading...</span>
           </div>
@@ -1607,6 +1706,205 @@
       onStoreFrameScaleChanged(145);
     }
 
+    let _stEntryObjectUrl = '';
+
+    function setStoreEntryDisplayMode(mode) {
+      const valid = ['FULLSCREEN', 'CENTER', 'LOWER', 'DRIVE_ACROSS'];
+      const clean = valid.includes(String(mode || '').toUpperCase()) ? String(mode).toUpperCase() : 'FULLSCREEN';
+      const hidden = document.getElementById('stEntryDisplayMode');
+      if (hidden) hidden.value = clean;
+      valid.forEach((m) => {
+        const b = document.getElementById('btnEntryMode_' + m);
+        if (b) {
+          b.style.borderColor = m === clean ? '#f6ce3e' : '';
+          b.style.background = m === clean ? 'rgba(246,206,62,0.22)' : '';
+          b.style.color = m === clean ? '#ffe082' : '';
+          b.style.fontWeight = m === clean ? '700' : '500';
+        }
+      });
+      onStoreEntryConfigChanged();
+    }
+
+    function updateStoreEntryMediaSource() {
+      const vid = document.getElementById('stEntryPreviewVideo');
+      const img = document.getElementById('stEntryPreviewImg');
+      const ph = document.getElementById('stEntryEmptyPlaceholder');
+      const patti = document.getElementById('stEntryPattiPreview');
+      if (!vid || !img) return;
+
+      const itemName = (document.getElementById('stItemName')?.value || '').trim() || 'Entry Effect';
+      if (patti) patti.textContent = '🚗 VIP User drives ' + itemName;
+
+      const animFile = document.getElementById('stAnimFile')?.files?.[0];
+      const iconFile = document.getElementById('stIconFile')?.files?.[0];
+      const animUrl = (document.getElementById('stItemAnimUrl')?.value || '').trim();
+      const iconUrl = (document.getElementById('stItemIconUrl')?.value || '').trim();
+
+      let src = '';
+      let isVid = false;
+
+      if (animFile) {
+        if (_stEntryObjectUrl) try { URL.revokeObjectURL(_stEntryObjectUrl); } catch (_) {}
+        _stEntryObjectUrl = URL.createObjectURL(animFile);
+        src = _stEntryObjectUrl;
+        isVid = String(animFile.type || '').startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(animFile.name || '');
+      } else if (animUrl) {
+        src = animUrl;
+        isVid = /\.(mp4|webm|mov|mkv)(\?|$)/i.test(animUrl) || animUrl.includes('/video/upload/') || animUrl.startsWith('data:video');
+      } else if (iconFile) {
+        if (_stEntryObjectUrl) try { URL.revokeObjectURL(_stEntryObjectUrl); } catch (_) {}
+        _stEntryObjectUrl = URL.createObjectURL(iconFile);
+        src = _stEntryObjectUrl;
+        isVid = false;
+      } else if (iconUrl) {
+        src = iconUrl;
+        isVid = false;
+      }
+
+      if (!src) {
+        vid.style.display = 'none';
+        vid.removeAttribute('src');
+        img.style.display = 'none';
+        img.removeAttribute('src');
+        if (ph) ph.style.display = 'block';
+        return;
+      }
+
+      if (ph) ph.style.display = 'none';
+      if (isVid) {
+        img.style.display = 'none';
+        if (vid.getAttribute('src') !== src) {
+          vid.src = src;
+          vid.load();
+        }
+        vid.style.display = 'block';
+        vid.play().catch(() => {});
+      } else {
+        vid.style.display = 'none';
+        try { vid.pause(); } catch (_) {}
+        img.src = src;
+        img.style.display = 'block';
+      }
+      onStoreEntryConfigChanged();
+    }
+
+    function onStoreEntryConfigChanged() {
+      const mode = document.getElementById('stEntryDisplayMode')?.value || 'FULLSCREEN';
+      const scaleVal = Math.max(40, Math.min(160, Math.round(Number(document.getElementById('stEntryScaleRange')?.value || 100))));
+      const offsetY = Math.max(-35, Math.min(35, Math.round(Number(document.getElementById('stEntryOffsetYRange')?.value || 0))));
+      const dur = Math.max(2, Math.min(12, Math.round(Number(document.getElementById('stEntryDurationRange')?.value || 4))));
+      const feather = Boolean(document.getElementById('stEntryFeatherEdges')?.checked);
+
+      const scaleInput = document.getElementById('stEntryScale');
+      const scaleBadge = document.getElementById('stEntryScaleBadge');
+      const offsetInput = document.getElementById('stEntryOffsetY');
+      const durInput = document.getElementById('stEntryDuration');
+      const durBadge = document.getElementById('stEntryDurationBadge');
+      if (scaleInput) scaleInput.value = scaleVal;
+      if (scaleBadge) scaleBadge.textContent = scaleVal + '%';
+      if (offsetInput) offsetInput.value = offsetY;
+      if (durInput) durInput.value = dur;
+      if (durBadge) durBadge.textContent = dur + 's';
+
+      const stage = document.getElementById('stEntryStageBox');
+      const vid = document.getElementById('stEntryPreviewVideo');
+      const img = document.getElementById('stEntryPreviewImg');
+      if (!stage || !vid || !img) return;
+
+      const scaleFactor = scaleVal / 100;
+      const offsetPx = Math.round((offsetY / 100) * 384);
+      const maskCss = feather ? 'linear-gradient(to bottom, transparent 0%, black 16%, black 82%, transparent 100%)' : 'none';
+      stage.style.webkitMaskImage = maskCss;
+      stage.style.maskImage = maskCss;
+
+      if (mode === 'FULLSCREEN') {
+        stage.style.top = '0px';
+        stage.style.bottom = '0px';
+        stage.style.left = '0px';
+        stage.style.right = '0px';
+        vid.style.width = '100%';
+        vid.style.height = '100%';
+        vid.style.objectFit = 'cover';
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'contain';
+        stage.style.transform = `translateY(${offsetPx}px) scale(${scaleFactor})`;
+      } else if (mode === 'LOWER') {
+        stage.style.top = '186px';
+        stage.style.bottom = '32px';
+        stage.style.left = '0px';
+        stage.style.right = '0px';
+        vid.style.width = '100%';
+        vid.style.height = '100%';
+        vid.style.objectFit = 'cover';
+        img.style.width = '92%';
+        img.style.height = '92%';
+        img.style.objectFit = 'contain';
+        stage.style.transform = `translateY(${offsetPx}px) scale(${scaleFactor})`;
+      } else if (mode === 'CENTER') {
+        stage.style.top = '58px';
+        stage.style.bottom = '58px';
+        stage.style.left = '8px';
+        stage.style.right = '8px';
+        vid.style.width = '100%';
+        vid.style.height = '100%';
+        vid.style.objectFit = 'contain';
+        img.style.width = '88%';
+        img.style.height = '88%';
+        img.style.objectFit = 'contain';
+        stage.style.transform = `translateY(${offsetPx}px) scale(${scaleFactor})`;
+      } else {
+        // DRIVE_ACROSS
+        stage.style.top = '105px';
+        stage.style.bottom = '56px';
+        stage.style.left = '6px';
+        stage.style.right = '6px';
+        vid.style.width = '100%';
+        vid.style.height = '100%';
+        vid.style.objectFit = 'contain';
+        img.style.width = '88%';
+        img.style.height = '88%';
+        img.style.objectFit = 'contain';
+        stage.style.transform = `translateY(${offsetPx}px) scale(${scaleFactor})`;
+      }
+    }
+
+    function replayStoreEntryPreview() {
+      const stage = document.getElementById('stEntryStageBox');
+      const vid = document.getElementById('stEntryPreviewVideo');
+      const patti = document.getElementById('stEntryPattiPreview');
+      const mode = document.getElementById('stEntryDisplayMode')?.value || 'FULLSCREEN';
+      if (vid && vid.style.display !== 'none') {
+        try { vid.currentTime = 0; vid.play().catch(() => {}); } catch (_) {}
+      }
+      if (stage) {
+        stage.style.transition = 'none';
+        if (mode === 'DRIVE_ACROSS') {
+          stage.style.transform = 'translateX(190px) scale(0.45)';
+          stage.style.opacity = '0';
+        } else {
+          stage.style.opacity = '0.15';
+        }
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            stage.style.transition = 'all 0.65s cubic-bezier(0.22,1,0.36,1)';
+            stage.style.opacity = '1';
+            onStoreEntryConfigChanged();
+          });
+        });
+      }
+      if (patti) {
+        patti.style.transition = 'none';
+        patti.style.transform = 'translateX(210px)';
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            patti.style.transition = 'transform 0.55s cubic-bezier(0.22,1,0.36,1)';
+            patti.style.transform = 'translateX(0px)';
+          });
+        });
+      }
+    }
+
     function onStoreCategoryChanged() {
       const cat = document.getElementById('stItemCat').value;
       document.getElementById('stSpecialIdWrap').style.display = cat === 'SPECIAL_ID' ? 'block' : 'none';
@@ -1615,10 +1913,16 @@
       const frameWrap = document.getElementById('stFrameDpPreviewWrap');
       if (frameWrap) frameWrap.style.display = cat === 'FRAME' ? 'block' : 'none';
       if (cat === 'FRAME') updateStoreFrameDpOverlay();
+      const entryWrap = document.getElementById('stEntryPreviewWrap');
+      if (entryWrap) entryWrap.style.display = cat === 'VEHICLE' ? 'block' : 'none';
+      if (cat === 'VEHICLE') {
+        setStoreEntryDisplayMode(document.getElementById('stEntryDisplayMode')?.value || 'FULLSCREEN');
+        updateStoreEntryMediaSource();
+      }
       const hintEl = document.getElementById('stCatHint');
       if (hintEl) {
         const hints = {
-          VEHICLE: '🏎️ Entry Effect: Upload Thumbnail Icon (PNG/GIF/WebP) + Optional MP4 Video / GIF / WebP animation!',
+          VEHICLE: '🏎️ Entry Effect: Upload Thumbnail Icon + MP4 Video / GIF / WebP animation, aur niche Live Chatroom Preview me set karo screen par kaise play hoga!',
           THEME: '🎨 Room Theme: Upload a 9:16 Room Background photo / GIF. When user equips it, it becomes their Voice Room wallpaper!',
           FRAME: '🖼️ Avatar Frame: Upload a transparent PNG / Animated WebP / Animated GIF frame! Adjust size % on live DP preview below.',
           BUBBLE: '💬 Chat Bubble: Upload a Chat Bubble background image / GIF and set sample preview text.',
@@ -1660,6 +1964,7 @@
         prev.src = URL.createObjectURL(f);
         prev.style.display = 'block';
         updateStoreFrameDpOverlay();
+        updateStoreEntryMediaSource();
       } catch (e) { showToast(e.message, true); }
     }
 
@@ -1671,6 +1976,7 @@
         lbl.textContent = 'Optional animation file';
         if (animPrev) animPrev.style.display = 'none';
         updateStoreFrameDpOverlay();
+        updateStoreEntryMediaSource();
         return;
       }
       const mb = (f.size / (1024 * 1024)).toFixed(2);
@@ -1685,6 +1991,7 @@
         }
       }
       updateStoreFrameDpOverlay();
+      updateStoreEntryMediaSource();
     }
 
     function previewStoreIconUrl(u) {
@@ -1696,6 +2003,7 @@
         prev.style.display = 'none';
       }
       updateStoreFrameDpOverlay();
+      updateStoreEntryMediaSource();
     }
 
     function previewStoreAnimUrl(u) {
@@ -1710,6 +2018,7 @@
         }
       }
       updateStoreFrameDpOverlay();
+      updateStoreEntryMediaSource();
     }
 
     function resetStoreForm() {
@@ -1736,6 +2045,11 @@
       const ap = document.getElementById('stAnimPreview');
       if (ap) ap.style.display = 'none';
       onStoreFrameScaleChanged(128);
+      if (document.getElementById('stEntryScaleRange')) document.getElementById('stEntryScaleRange').value = 100;
+      if (document.getElementById('stEntryOffsetYRange')) document.getElementById('stEntryOffsetYRange').value = 0;
+      if (document.getElementById('stEntryDurationRange')) document.getElementById('stEntryDurationRange').value = 4;
+      if (document.getElementById('stEntryFeatherEdges')) document.getElementById('stEntryFeatherEdges').checked = false;
+      setStoreEntryDisplayMode('FULLSCREEN');
       document.getElementById('btnSaveStoreItem').textContent = '🚀 Upload & Publish Store Item';
       document.getElementById('btnCancelStoreEdit').style.display = 'none';
       onStoreCategoryChanged();
@@ -1762,6 +2076,11 @@
       document.getElementById('stItemIconUrl').value = item.iconUrl || '';
       document.getElementById('stItemAnimUrl').value = item.animationUrl || '';
       onStoreFrameScaleChanged(item.frameScalePercent || 128);
+      if (document.getElementById('stEntryScaleRange')) document.getElementById('stEntryScaleRange').value = item.entryScalePercent || 100;
+      if (document.getElementById('stEntryOffsetYRange')) document.getElementById('stEntryOffsetYRange').value = item.entryOffsetYPercent || 0;
+      if (document.getElementById('stEntryDurationRange')) document.getElementById('stEntryDurationRange').value = item.entryDurationSec || 4;
+      if (document.getElementById('stEntryFeatherEdges')) document.getElementById('stEntryFeatherEdges').checked = Boolean(item.entryFeatherEdges);
+      setStoreEntryDisplayMode(item.entryDisplayMode || 'FULLSCREEN');
       selectedStoreIconDataUrl = '';
       previewStoreIconUrl(item.iconUrl || '');
       previewStoreAnimUrl(item.animationUrl || '');
@@ -1824,6 +2143,11 @@
           basePrice7Days: Number(document.getElementById('stItemPrice').value || 10000),
           rarityStars: Number(document.getElementById('stItemRarity').value || 2),
           frameScalePercent: Number(document.getElementById('stFrameScale')?.value || 128),
+          entryDisplayMode: document.getElementById('stEntryDisplayMode')?.value || 'FULLSCREEN',
+          entryScalePercent: Number(document.getElementById('stEntryScale')?.value || 100),
+          entryOffsetYPercent: Number(document.getElementById('stEntryOffsetY')?.value || 0),
+          entryDurationSec: Number(document.getElementById('stEntryDuration')?.value || 4),
+          entryFeatherEdges: Boolean(document.getElementById('stEntryFeatherEdges')?.checked),
           iconUrl,
           animationUrl,
           hasAnimationPlay: Boolean(animationUrl) || iconIsAnim || cat === 'VEHICLE' || cat === 'MIC_WAVE',

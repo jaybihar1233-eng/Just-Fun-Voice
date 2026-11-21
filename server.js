@@ -408,8 +408,11 @@ function getOrCreateStoreInventory(uid) {
 function pruneAndSyncUserStore(uid, nowMs = Date.now()) {
   const inv = getOrCreateStoreInventory(uid);
   for (const [itemId, entry] of inv.items.entries()) {
-    if (!entry || Number(entry.expiresAtMs || 0) <= nowMs || !STORE_CATALOG[itemId]) {
+    const spec = STORE_CATALOG[itemId];
+    if (!entry || Number(entry.expiresAtMs || 0) <= nowMs || !spec) {
       inv.items.delete(itemId);
+    } else if (!entry.category && spec.category) {
+      entry.category = spec.category;
     }
   }
   for (const cat of Object.keys(inv.equipped)) {
@@ -452,16 +455,19 @@ function buildStoreStatePayload(uid, integrity = null) {
   const inv = pruneAndSyncUserStore(uid, nowMs);
   const ownedItems = Array.from(inv.items.values())
     .sort((a, b) => Number(b.purchasedAtMs || 0) - Number(a.purchasedAtMs || 0))
-    .map((entry) => ({
-      itemId: entry.itemId,
-      category: entry.category,
-      expiresAtMs: Number(entry.expiresAtMs || 0),
-      totalDaysPurchased: Number(entry.totalDaysPurchased || 7),
-      purchasedAtMs: Number(entry.purchasedAtMs || nowMs),
-      isEquipped: inv.equipped[entry.category] === entry.itemId,
-      giftedById: entry.giftedById || '',
-      giftedByName: entry.giftedByName || '',
-    }));
+    .map((entry) => {
+      const cat = entry.category || STORE_CATALOG[entry.itemId]?.category || '';
+      return {
+        itemId: entry.itemId,
+        category: cat,
+        expiresAtMs: Number(entry.expiresAtMs || 0),
+        totalDaysPurchased: Number(entry.totalDaysPurchased || 7),
+        purchasedAtMs: Number(entry.purchasedAtMs || nowMs),
+        isEquipped: Boolean(cat && inv.equipped[cat] === entry.itemId),
+        giftedById: entry.giftedById || '',
+        giftedByName: entry.giftedByName || '',
+      };
+    });
   const effIntegrity = integrity || users.get(uid)?.lastIntegrity || null;
   const isCloned = Boolean(effIntegrity && effIntegrity.isClonedEnvironment);
   return {
@@ -2418,6 +2424,30 @@ function resolveUserEquippedFrameMedia(uid) {
   return { url, scale };
 }
 
+function resolveUserEquippedVehicleEntry(uid) {
+  if (!uid) return null;
+  const inv = userStoreInventories.get(String(uid));
+  const vehicleId = inv?.equipped?.VEHICLE || '';
+  const spec = vehicleId ? STORE_CATALOG[vehicleId] : null;
+  if (!spec) return null;
+  const videoUrl = String(spec.animationUrl || '').trim();
+  const iconUrl = String(spec.iconUrl || '').trim();
+  if (!videoUrl && !iconUrl) return null;
+  const validModes = new Set(['FULLSCREEN', 'CENTER', 'LOWER', 'DRIVE_ACROSS']);
+  const rawMode = String(spec.entryDisplayMode || 'FULLSCREEN').trim().toUpperCase();
+  return {
+    vehicleId: spec.id,
+    vehicleName: spec.name || 'VIP Entry Effect',
+    videoUrl,
+    iconUrl,
+    entryDisplayMode: validModes.has(rawMode) ? rawMode : 'FULLSCREEN',
+    entryScalePercent: Math.max(40, Math.min(160, Math.round(Number(spec.entryScalePercent || 100)))),
+    entryOffsetYPercent: Math.max(-35, Math.min(35, Math.round(Number(spec.entryOffsetYPercent || 0)))),
+    entryDurationSec: Math.max(2, Math.min(12, Math.round(Number(spec.entryDurationSec || 4)))),
+    entryFeatherEdges: Boolean(spec.entryFeatherEdges),
+  };
+}
+
 function buildRoomSnapshot(room) {
   const hostFrame = resolveUserEquippedFrameMedia(room.hostId || room.id);
   const enrichedSeats = Array.isArray(room.seats)
@@ -4345,6 +4375,7 @@ app.post('/api/admin/store/grant', requireAdminAuth, (req, res) => {
   const baseExpiry = existing && Number(existing.expiresAtMs || 0) > nowMs ? Number(existing.expiresAtMs) : nowMs;
   inv.items.set(itemId, {
     itemId,
+    category: spec.category,
     expiresAtMs: baseExpiry + days * STORE_DAY_MS,
     totalDaysPurchased: (existing ? Number(existing.totalDaysPurchased || 0) : 0) + days,
     giftedByName: 'Official Admin',
@@ -5807,6 +5838,7 @@ wss.on('connection', (ws, req) => {
           if (hostAvatarUri) room.hostAvatarUri = hostAvatarUri;
         }
 
+        const wasAlreadyInRoom = room.activeClients.has(userId);
         room.activeClients.set(userId, ws);
         room.updatedAt = Date.now();
         const prevStay = userRoomStayTracking.get(String(userId));
@@ -5824,6 +5856,24 @@ wss.on('connection', (ws, req) => {
         globalRocketBroadcast?.pushActiveBroadcasts(ws);
         broadcastLiveRoomsToHome();
         if (catalogManager) catalogManager.onRoomJoined(userId, roomId);
+
+        // Broadcast live Room Entry Animation to all participants when user enters with an equipped Vehicle
+        if (!wasAlreadyInRoom) {
+          const eqEntry = resolveUserEquippedVehicleEntry(userId);
+          if (eqEntry) {
+            const uProfile = users.get(String(userId));
+            broadcastToRoom(room, {
+              type: 'ROOM_ENTRY_EFFECT',
+              roomId: String(roomId),
+              userId: String(userId),
+              userName: String(uProfile?.nickname || hostName || `User ${userId}`),
+              userAvatarUri: String(uProfile?.avatarUri || hostAvatarUri || ''),
+              userLevel: Number(uProfile?.level || 0),
+              ...eqEntry,
+              ts: Date.now(),
+            });
+          }
+        }
         break;
       }
 

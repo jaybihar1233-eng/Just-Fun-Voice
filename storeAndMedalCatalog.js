@@ -426,6 +426,24 @@ function initStoreAndMedalCatalog(ctx) {
       90,
       Math.min(280, Math.round(Number(req.body.frameScalePercent ?? prev.frameScalePercent ?? 128) || 128))
     );
+    const VALID_ENTRY_MODES = new Set(['FULLSCREEN', 'CENTER', 'LOWER', 'DRIVE_ACROSS']);
+    const rawEntryMode = String(req.body.entryDisplayMode ?? prev.entryDisplayMode ?? 'FULLSCREEN').trim().toUpperCase();
+    const entryDisplayMode = VALID_ENTRY_MODES.has(rawEntryMode) ? rawEntryMode : 'FULLSCREEN';
+    const entryScalePercent = Math.max(
+      40,
+      Math.min(160, Math.round(Number(req.body.entryScalePercent ?? prev.entryScalePercent ?? 100) || 100))
+    );
+    const entryOffsetYPercent = Math.max(
+      -35,
+      Math.min(35, Math.round(Number(req.body.entryOffsetYPercent ?? prev.entryOffsetYPercent ?? 0) || 0))
+    );
+    const entryDurationSec = Math.max(
+      2,
+      Math.min(12, Math.round(Number(req.body.entryDurationSec ?? prev.entryDurationSec ?? 4) || 4))
+    );
+    const entryFeatherEdges = req.body.entryFeatherEdges !== undefined
+      ? Boolean(req.body.entryFeatherEdges)
+      : Boolean(prev.entryFeatherEdges || false);
     const active = req.body.active !== false;
 
     STORE_CATALOG[id] = {
@@ -442,6 +460,11 @@ function initStoreAndMedalCatalog(ctx) {
       iconUrl,
       animationUrl,
       frameScalePercent,
+      entryDisplayMode,
+      entryScalePercent,
+      entryOffsetYPercent,
+      entryDurationSec,
+      entryFeatherEdges,
       specialIdNumber,
       sampleBubbleText,
       micWaveColorHex: parsedColor !== null ? parsedColor : (category === 'MIC_WAVE' ? 0xFF19CC9D : undefined),
